@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { X, Download, Upload, RotateCcw } from "lucide-react";
 import { Modal } from "./Modal";
 
 interface SettingsModalProps {
@@ -9,6 +9,9 @@ interface SettingsModalProps {
   onTransitionEnabledChange: (v: boolean) => void;
   transitionDurationMs: number;
   onTransitionDurationChange: (ms: number) => void;
+  onExport: () => void;
+  onImport: () => void;
+  onResetPresets: () => void;
   onClose: () => void;
 }
 
@@ -59,6 +62,9 @@ export function SettingsModal({
   onTransitionEnabledChange,
   transitionDurationMs,
   onTransitionDurationChange,
+  onExport,
+  onImport,
+  onResetPresets,
   onClose,
 }: SettingsModalProps) {
   return (
@@ -73,7 +79,7 @@ export function SettingsModal({
           </button>
         </div>
 
-        <div className="px-5 py-4 space-y-5">
+        <div className="px-5 py-4 space-y-5 max-h-[70vh] overflow-y-auto">
           <Toggle
             checked={autoConnect}
             onChange={onAutoConnectChange}
@@ -118,6 +124,38 @@ export function SettingsModal({
               </div>
             </div>
           )}
+
+          <div className="border-t border-[#2e2e38]" />
+
+          <div>
+            <h3 className="text-sm font-medium text-[#f0f0f4] mb-1">Data & Backup</h3>
+            <p className="text-xs text-[#555568] leading-relaxed mb-3">
+              Export or import your presets, sections, and settings as JSON.
+            </p>
+            <div className="space-y-2">
+              <button
+                onClick={onExport}
+                className="flex w-full items-center gap-2 rounded-lg border border-[#2e2e38] bg-[#111114] px-3 py-2 text-xs font-medium text-[#9090a0] hover:bg-[#1e1e24] hover:text-[#f0f0f4] transition-colors"
+              >
+                <Download size={13} />
+                Export configuration
+              </button>
+              <button
+                onClick={onImport}
+                className="flex w-full items-center gap-2 rounded-lg border border-[#2e2e38] bg-[#111114] px-3 py-2 text-xs font-medium text-[#9090a0] hover:bg-[#1e1e24] hover:text-[#f0f0f4] transition-colors"
+              >
+                <Upload size={13} />
+                Import configuration
+              </button>
+              <button
+                onClick={onResetPresets}
+                className="flex w-full items-center gap-2 rounded-lg border border-[#2e2e38] bg-[#111114] px-3 py-2 text-xs font-medium text-[#f87171] hover:bg-red-500/10 transition-colors"
+              >
+                <RotateCcw size={13} />
+                Reset to defaults
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="flex justify-end px-5 py-4 border-t border-[#2e2e38]">
