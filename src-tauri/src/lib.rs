@@ -1,101 +1,113 @@
 mod errors;
 mod lamp;
 mod protocol;
+mod reconnect;
 mod state;
 mod store;
 
 use crate::errors::LampError;
-use crate::lamp::{connect_peripheral, disconnect_peripheral, scan_for_lamp, write_color};
-use crate::state::{ConnectionStatus, LampState, SharedLampState};
+use crate::lamp::{disconnect_peripheral, write_color};
+use crate::reconnect::{mark_stale, perform_connect, spawn_auto_reconnect};
+use crate::state::{ConnectMode, ConnectionStatus, LampState, SharedLampState};
 use crate::store::AppState;
 
 use btleplug::api::Peripheral as _;
-use std::time::Duration;
+use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
-use tokio::time::sleep;
 
-// ─── Internal connect routine ─────────────────────────────────────────────────
-
-/// Shared by both connect_lamp and reconnect_lamp.
-/// Always tears down any existing BLE connection before scanning fresh.
-async fn perform_connect(state: &SharedLampState) -> Result<(), LampError> {
-    // 1. Take any existing peripheral and disconnect it cleanly
-    let existing = {
-        let mut s = state.lock().await;
-        s.status = ConnectionStatus::Scanning;
-        s.peripheral.take()
-    };
-    if let Some(p) = existing {
-        disconnect_peripheral(&p).await;
-        drop(p);
-        // Give CoreBluetooth a moment to fully release the connection
-        sleep(Duration::from_millis(400)).await;
-    }
-
-    // 2. Fresh scan
-    let peripheral = match scan_for_lamp().await {
-        Ok(p) => p,
-        Err(e) => {
-            let mut s = state.lock().await;
-            s.status = ConnectionStatus::Failed;
-            return Err(e);
-        }
-    };
-
-    // 3. Connect
-    {
-        let mut s = state.lock().await;
-        s.status = ConnectionStatus::Connecting;
-    }
-    if let Err(e) = connect_peripheral(&peripheral).await {
-        let mut s = state.lock().await;
-        s.status = ConnectionStatus::Failed;
-        return Err(e);
-    }
-
-    // 4. Store
+async fn sync_status_with_peripheral(state: &SharedLampState) -> ConnectionStatus {
     let mut s = state.lock().await;
-    s.status = ConnectionStatus::Connected;
-    s.peripheral = Some(peripheral);
-    Ok(())
-}
 
-// ─── Commands ────────────────────────────────────────────────────────────────
+    if s.reconnect_in_progress {
+        return s.status.clone();
+    }
+
+    if matches!(
+        s.status,
+        ConnectionStatus::Scanning
+            | ConnectionStatus::Connecting
+            | ConnectionStatus::Reconnecting
+    ) {
+        return s.status.clone();
+    }
+
+    if let Some(ref p) = s.peripheral {
+        match p.is_connected().await {
+            Ok(true) => {
+                if s.status != ConnectionStatus::Connected {
+                    s.status = ConnectionStatus::Connected;
+                }
+                return ConnectionStatus::Connected;
+            }
+            _ => {
+                if s.status == ConnectionStatus::Connected {
+                    s.status = ConnectionStatus::Stale;
+                    s.peripheral.take();
+                }
+                return s.status.clone();
+            }
+        }
+    }
+
+    s.status.clone()
+}
 
 #[tauri::command]
 async fn connect_lamp(state: State<'_, SharedLampState>) -> Result<(), LampError> {
-    perform_connect(&state).await
+    {
+        let mut s = state.lock().await;
+        s.user_disconnected = false;
+        s.reconnect_attempts = 0;
+    }
+    perform_connect(&state, ConnectMode::Manual).await
 }
 
 #[tauri::command]
 async fn disconnect_lamp(state: State<'_, SharedLampState>) -> Result<(), LampError> {
-    let mut s = state.lock().await;
-    if let Some(p) = s.peripheral.take() {
-        p.disconnect().await.ok();
+    let peripheral = {
+        let mut s = state.lock().await;
+        s.peripheral.take()
+    };
+    if let Some(p) = peripheral {
+        disconnect_peripheral(&p).await;
     }
+    let mut s = state.lock().await;
     s.status = ConnectionStatus::Disconnected;
+    s.user_disconnected = true;
+    s.reconnect_in_progress = false;
     Ok(())
 }
 
 #[tauri::command]
 async fn reconnect_lamp(state: State<'_, SharedLampState>) -> Result<(), LampError> {
-    perform_connect(&state).await
+    {
+        let mut s = state.lock().await;
+        s.user_disconnected = false;
+    }
+    perform_connect(&state, ConnectMode::Reconnect).await
 }
 
 #[tauri::command]
-async fn get_connection_status(state: State<'_, SharedLampState>) -> Result<ConnectionStatus, LampError> {
-    let s = state.lock().await;
-    if let Some(ref p) = s.peripheral {
-        match p.is_connected().await {
-            Ok(true) => return Ok(ConnectionStatus::Connected),
-            _ => {
-                // Peripheral lost; update state on next write attempt
-                return Ok(ConnectionStatus::Disconnected);
-            }
-        }
+async fn refresh_bluetooth(state: State<'_, SharedLampState>) -> Result<(), LampError> {
+    {
+        let mut s = state.lock().await;
+        s.user_disconnected = false;
+        s.reconnect_attempts = 0;
     }
-    Ok(s.status.clone())
+    perform_connect(&state, ConnectMode::Refresh).await
+}
+
+#[tauri::command]
+async fn get_connection_status(
+    state: State<'_, SharedLampState>,
+) -> Result<ConnectionStatus, LampError> {
+    Ok(sync_status_with_peripheral(&state).await)
+}
+
+#[tauri::command]
+async fn verify_connection(state: State<'_, SharedLampState>) -> Result<ConnectionStatus, LampError> {
+    Ok(sync_status_with_peripheral(&state).await)
 }
 
 #[tauri::command]
@@ -112,19 +124,44 @@ async fn set_color(
         )));
     }
 
-    let s = state.lock().await;
-    let peripheral = s.peripheral.as_ref().ok_or(LampError::NotConnected)?;
-    let char_uuid = s.characteristic_uuid;
+    let write_result = {
+        let s = state.lock().await;
+        if s.status != ConnectionStatus::Connected {
+            if matches!(s.status, ConnectionStatus::Stale | ConnectionStatus::Reconnecting) {
+                return Err(LampError::ConnectionStale);
+            }
+            return Err(LampError::NotConnected);
+        }
+        let peripheral = match s.peripheral.as_ref() {
+            Some(p) => p,
+            None => return Err(LampError::NotConnected),
+        };
+        let char_uuid = s.characteristic_uuid;
 
-    write_color(peripheral, char_uuid, r, g, b, brightness).await
+        if let Ok(false) = peripheral.is_connected().await {
+            drop(s);
+            mark_stale(&state).await;
+            spawn_auto_reconnect(state.inner().clone());
+            return Err(LampError::ConnectionStale);
+        }
+
+        write_color(peripheral, char_uuid, r, g, b, brightness).await
+    };
+
+    match write_result {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            mark_stale(&state).await;
+            spawn_auto_reconnect(state.inner().clone());
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
 async fn get_known_device() -> Result<String, LampError> {
     Ok("SSL-99A4C3".to_string())
 }
-
-// ─── Persistence commands ─────────────────────────────────────────────────────
 
 #[tauri::command]
 async fn load_state(app: AppHandle) -> Result<Option<AppState>, String> {
@@ -136,18 +173,20 @@ async fn save_state(app: AppHandle, state: AppState) -> Result<(), String> {
     store::save(&app, &state)
 }
 
-// ─── App entry point ─────────────────────────────────────────────────────────
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let lamp_state: SharedLampState = Mutex::new(LampState::new());
+    let lamp_state: SharedLampState = Arc::new(Mutex::new(LampState::new()));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(lamp_state)
         .invoke_handler(tauri::generate_handler![
             connect_lamp,
             disconnect_lamp,
             reconnect_lamp,
+            refresh_bluetooth,
+            verify_connection,
             get_connection_status,
             set_color,
             get_known_device,

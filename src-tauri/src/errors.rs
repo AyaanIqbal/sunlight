@@ -8,13 +8,16 @@ pub enum LampError {
     #[error("Could not find SSL-99A4C3. Make sure the lamp is on and the iStrip app is closed.")]
     DeviceNotFound,
 
-    #[error("Connection failed. Close the iStrip app and try again.")]
-    ConnectionFailed,
+    #[error("Could not connect to SSL-99A4C3. The iStrip app or another device may already be connected. Fully close iStrip and try Refresh Bluetooth.")]
+    DeviceUnavailable,
 
     #[error("Not connected to a lamp. Connect first.")]
     NotConnected,
 
-    #[error("Failed to send color. The lamp may have disconnected.")]
+    #[error("Connection is stale. Try Refresh Bluetooth.")]
+    ConnectionStale,
+
+    #[error("Failed to send color. The lamp may have disconnected. Try Refresh Bluetooth.")]
     WriteFailure,
 
     #[error("Invalid value: {0}")]
@@ -36,7 +39,6 @@ impl From<btleplug::Error> for LampError {
     }
 }
 
-// Allow serializing the error message for Tauri commands
 impl serde::Serialize for LampError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&self.to_string())

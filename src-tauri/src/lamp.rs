@@ -68,12 +68,12 @@ pub async fn connect_peripheral(peripheral: &Peripheral) -> Result<(), LampError
     peripheral
         .connect()
         .await
-        .map_err(|_| LampError::ConnectionFailed)?;
+        .map_err(|_| LampError::DeviceUnavailable)?;
 
     peripheral
         .discover_services()
         .await
-        .map_err(|_| LampError::ConnectionFailed)?;
+        .map_err(|_| LampError::DeviceUnavailable)?;
 
     Ok(())
 }
