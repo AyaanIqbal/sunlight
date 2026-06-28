@@ -9,8 +9,20 @@ export async function disconnectLamp(): Promise<void> {
   await invoke("disconnect_lamp");
 }
 
+export async function reconnectLamp(): Promise<void> {
+  await invoke("reconnect_lamp");
+}
+
+export async function refreshBluetooth(): Promise<void> {
+  await invoke("refresh_bluetooth");
+}
+
 export async function getConnectionStatus(): Promise<ConnectionStatus> {
   return await invoke<ConnectionStatus>("get_connection_status");
+}
+
+export async function verifyConnection(): Promise<ConnectionStatus> {
+  return await invoke<ConnectionStatus>("verify_connection");
 }
 
 export async function setColor(
@@ -20,10 +32,6 @@ export async function setColor(
   brightness: number
 ): Promise<void> {
   await invoke("set_color", { r, g, b, brightness });
-}
-
-export async function reconnectLamp(): Promise<void> {
-  await invoke("reconnect_lamp");
 }
 
 interface PendingColor {
@@ -37,12 +45,32 @@ let throttleTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSendTime = 0;
 let pending: PendingColor | null = null;
 
-async function sendColor(r: number, g: number, b: number, brightness: number): Promise<void> {
+type SendColorFn = (
+  r: number,
+  g: number,
+  b: number,
+  brightness: number
+) => Promise<{ sent: boolean }>;
+
+let sendColorImpl: SendColorFn = async (r, g, b, brightness) => {
   try {
     await setColor(r, g, b, brightness);
+    return { sent: true };
   } catch {
-    // Swallow; the UI handles connection state separately
+    return { sent: false };
   }
+};
+
+export function setSendColorImpl(fn: SendColorFn): void {
+  sendColorImpl = fn;
+}
+
+export function clearThrottledSends(): void {
+  if (throttleTimer) {
+    clearTimeout(throttleTimer);
+    throttleTimer = null;
+  }
+  pending = null;
 }
 
 /** Leading + trailing throttle — fires immediately, then at most once per interval during drag, with a final trailing send. */
@@ -59,7 +87,7 @@ export function throttledSetColor(
   if (now - lastSendTime >= interval) {
     lastSendTime = now;
     pending = null;
-    void sendColor(r, g, b, brightness);
+    void sendColorImpl(r, g, b, brightness);
     return;
   }
 
@@ -72,22 +100,11 @@ export function throttledSetColor(
       lastSendTime = Date.now();
       const { r: pr, g: pg, b: pb, brightness: pbr } = pending;
       pending = null;
-      void sendColor(pr, pg, pb, pbr);
+      void sendColorImpl(pr, pg, pb, pbr);
     }
   }, remaining);
 }
 
-/** @deprecated Use throttledSetColor */
-export function debouncedSetColor(
-  r: number,
-  g: number,
-  b: number,
-  brightness: number,
-  delay = 0
-): void {
-  if (delay <= 0) {
-    void sendColor(r, g, b, brightness);
-    return;
-  }
-  throttledSetColor(r, g, b, brightness, delay);
+export function canSendToLamp(): boolean {
+  return sendColorImpl !== null;
 }

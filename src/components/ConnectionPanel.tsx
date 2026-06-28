@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Wifi, WifiOff, Loader2, RotateCcw, Power } from "lucide-react";
+import { Wifi, WifiOff, Loader2, RotateCcw, Power, Radio } from "lucide-react";
 import type { ConnectionStatus } from "../types";
-import { connectLamp, disconnectLamp, getConnectionStatus, reconnectLamp } from "../lampApi";
+import {
+  connectLamp,
+  disconnectLamp,
+  getConnectionStatus,
+  reconnectLamp,
+} from "../lampApi";
+import { formatConnectionError, refreshBluetooth } from "../connectionManager";
 
 interface ConnectionPanelProps {
   status: ConnectionStatus;
@@ -15,6 +21,8 @@ const STATUS_LABEL: Record<ConnectionStatus, string> = {
   scanning: "Scanning…",
   connecting: "Connecting…",
   connected: "Connected",
+  reconnecting: "Reconnecting…",
+  stale: "Connection lost",
   failed: "Connection failed",
 };
 
@@ -23,10 +31,15 @@ const STATUS_COLOR: Record<ConnectionStatus, string> = {
   scanning: "text-[#facc15]",
   connecting: "text-[#facc15]",
   connected: "text-[#4ade80]",
+  reconnecting: "text-[#fbbf24]",
+  stale: "text-[#fbbf24]",
   failed: "text-[#f87171]",
 };
 
 const POLL_MS = 2000;
+
+const innerGroupClass =
+  "flex items-center gap-1.5 rounded-lg border border-[#2e2e38] bg-[#111114] px-2 py-1.5 min-w-0";
 
 export function ConnectionPanel({
   status,
@@ -51,6 +64,13 @@ export function ConnectionPanel({
     };
   }, [onStatusChange]);
 
+  const isBusyState =
+    status === "scanning" || status === "connecting" || status === "reconnecting";
+  const isConnected = status === "connected";
+  const isAnimating = isBusyState;
+  const isRecovering = status === "stale" || status === "reconnecting";
+  const canConnect = status === "failed" || status === "disconnected" || status === "stale";
+
   const handleConnect = async () => {
     setBusy(true);
     onError(null);
@@ -60,7 +80,7 @@ export function ConnectionPanel({
       onStatusChange("connected");
     } catch (e: unknown) {
       onStatusChange("failed");
-      onError(typeof e === "string" ? e : "Could not connect to SSL-99A4C3. Make sure the lamp is on and the iStrip app is closed.");
+      onError(formatConnectionError(e));
     } finally {
       setBusy(false);
     }
@@ -82,74 +102,99 @@ export function ConnectionPanel({
   const handleReconnect = async () => {
     setBusy(true);
     onError(null);
-    onStatusChange("connecting");
+    onStatusChange("reconnecting");
     try {
       await reconnectLamp();
       onStatusChange("connected");
     } catch (e: unknown) {
       onStatusChange("failed");
-      onError(typeof e === "string" ? e : "Reconnect failed. Close the iStrip app and try again.");
+      onError(formatConnectionError(e));
     } finally {
       setBusy(false);
     }
   };
 
-  const isConnected = status === "connected";
-  const isAnimating = status === "scanning" || status === "connecting";
+  const handleRefresh = async () => {
+    setBusy(true);
+    onError(null);
+    try {
+      await refreshBluetooth();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const statusIcon = isAnimating ? (
+    <Loader2 size={14} className="text-[#facc15] animate-spin flex-shrink-0" />
+  ) : isConnected ? (
+    <Wifi size={14} className="text-[#4ade80] flex-shrink-0" />
+  ) : isRecovering ? (
+    <Loader2 size={14} className="text-[#fbbf24] animate-spin flex-shrink-0" />
+  ) : (
+    <WifiOff
+      size={14}
+      className={`flex-shrink-0 ${status === "failed" ? "text-[#f87171]" : "text-[#9090a0]"}`}
+    />
+  );
 
   return (
-    <div className="rounded-xl border border-[#2e2e38] bg-[#18181c] p-4">
-      <div className="flex items-center gap-2 min-w-0">
-        {/* Status icon */}
-        <div className="flex-shrink-0">
-          {isAnimating ? (
-            <Loader2 size={14} className="text-[#facc15] animate-spin" />
-          ) : isConnected ? (
-            <Wifi size={14} className="text-[#4ade80]" />
-          ) : (
-            <WifiOff size={14} className="text-[#9090a0]" />
-          )}
+    <div className="rounded-xl border border-[#2e2e38] bg-[#18181c] p-3">
+      <div className="flex flex-col gap-2">
+        {/* Status + Refresh */}
+        <div className={`${innerGroupClass} justify-between`}>
+          <div className="flex items-center gap-2 min-w-0">
+            {statusIcon}
+            <span className={`text-xs font-semibold truncate ${STATUS_COLOR[status]}`}>
+              {STATUS_LABEL[status]}
+            </span>
+          </div>
+          <button
+            onClick={handleRefresh}
+            disabled={busy || isBusyState}
+            title="Refresh Bluetooth"
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-[#9090a0] hover:bg-[#2e2e38] disabled:opacity-50 transition-colors flex-shrink-0"
+          >
+            <Radio size={11} />
+            Refresh
+          </button>
         </div>
 
-        {/* Status label */}
-        <span className={`text-xs font-semibold flex-shrink-0 ${STATUS_COLOR[status]}`}>
-          {STATUS_LABEL[status]}
-        </span>
-
-        <div className="flex-1" />
-
-        {/* Action buttons — always right-aligned, never overflow */}
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {(status === "failed" || status === "disconnected") && (
-            <button
-              onClick={handleConnect}
-              disabled={busy}
-              className="flex items-center gap-1 rounded-lg bg-[#ff8040]/15 px-2.5 py-1 text-xs font-medium text-[#ff8040] hover:bg-[#ff8040]/25 disabled:opacity-50 transition-colors"
-            >
-              <Power size={11} />
-              Connect
-            </button>
-          )}
-          {isConnected && (
-            <>
+        {/* Reconnect + Disconnect, or Connect */}
+        {(isConnected || canConnect) && (
+          <div className={`${innerGroupClass} justify-end`}>
+            {canConnect && (
               <button
-                onClick={handleReconnect}
-                disabled={busy}
-                title="Reconnect"
-                className="flex items-center rounded-lg px-2 py-1 text-xs font-medium text-[#9090a0] hover:bg-[#2e2e38] disabled:opacity-50 transition-colors"
+                onClick={handleConnect}
+                disabled={busy || isBusyState}
+                className="flex w-full items-center justify-center gap-1 rounded-md bg-[#ff8040]/15 px-2.5 py-1 text-xs font-medium text-[#ff8040] hover:bg-[#ff8040]/25 disabled:opacity-50 transition-colors"
               >
-                <RotateCcw size={11} />
+                <Power size={11} />
+                Connect
               </button>
-              <button
-                onClick={handleDisconnect}
-                disabled={busy}
-                className="flex items-center gap-1 rounded-lg bg-red-500/15 px-2.5 py-1 text-xs font-medium text-[#f87171] hover:bg-red-500/25 disabled:opacity-50 transition-colors"
-              >
-                Disconnect
-              </button>
-            </>
-          )}
-        </div>
+            )}
+
+            {isConnected && (
+              <>
+                <button
+                  onClick={handleReconnect}
+                  disabled={busy || isBusyState}
+                  title="Reconnect"
+                  className="flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-[#9090a0] hover:bg-[#2e2e38] disabled:opacity-50 transition-colors min-w-0"
+                >
+                  <RotateCcw size={11} className="flex-shrink-0" />
+                  Reconnect
+                </button>
+                <button
+                  onClick={handleDisconnect}
+                  disabled={busy}
+                  className="flex flex-1 items-center justify-center gap-1 rounded-md bg-red-500/15 px-2 py-1 text-xs font-medium text-[#f87171] hover:bg-red-500/25 disabled:opacity-50 transition-colors min-w-0"
+                >
+                  Disconnect
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {error && (

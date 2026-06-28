@@ -4,7 +4,8 @@ import { RgbSliders } from "./RgbSliders";
 import { ColorWheelPicker } from "./ColorWheelPicker";
 import { CurrentColorPreview } from "./CurrentColorPreview";
 import type { ConnectionStatus } from "../types";
-import { setColor, throttledSetColor } from "../lampApi";
+import { throttledSetColor } from "../lampApi";
+import { safeSetColor } from "../connectionManager";
 
 type PickerMode = "sliders" | "wheel";
 
@@ -46,11 +47,7 @@ export function ColorControlPanel({
   };
 
   const handleApply = async () => {
-    try {
-      await setColor(r, g, b, brightness);
-    } catch {
-      // error displayed at app level
-    }
+    await safeSetColor(r, g, b, brightness);
   };
 
   return (

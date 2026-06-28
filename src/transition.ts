@@ -1,4 +1,5 @@
 import { throttledSetColor } from "./lampApi";
+import { canSend } from "./connectionManager";
 
 export interface ColorState {
   r: number;
@@ -36,17 +37,18 @@ export function animateColorTransition(
   to: ColorState,
   durationMs: number,
   onStep: (color: ColorState) => void,
-  options?: { sendToLamp?: boolean; onComplete?: () => void }
+  options?: { sendToLamp?: boolean; onComplete?: () => void; canSend?: () => boolean }
 ): void {
   cancelTransition();
 
   const sendToLamp = options?.sendToLamp ?? true;
   const onComplete = options?.onComplete;
+  const shouldSend = options?.canSend ?? canSend;
   const start = performance.now();
   let lastSent: ColorState | null = null;
 
   const sendIfChanged = (color: ColorState, force = false) => {
-    if (!sendToLamp) return;
+    if (!sendToLamp || !shouldSend()) return;
     if (force || !lastSent || !colorsEqual(lastSent, color)) {
       lastSent = color;
       throttledSetColor(color.r, color.g, color.b, color.brightness, TRANSITION_SEND_INTERVAL_MS);
@@ -54,6 +56,11 @@ export function animateColorTransition(
   };
 
   const tick = (now: number) => {
+    if (sendToLamp && !shouldSend()) {
+      rafId = null;
+      return;
+    }
+
     const elapsed = now - start;
     const rawT = durationMs <= 0 ? 1 : Math.min(elapsed / durationMs, 1);
     const t = easeInOutSine(rawT);
