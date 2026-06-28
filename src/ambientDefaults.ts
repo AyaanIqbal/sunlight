@@ -1,13 +1,29 @@
-import type { AmbientOutputFps, AmbientSettings } from "./types";
+import type { AmbientOutputRate, AmbientSettings } from "./types";
 import { DEFAULT_AMBIENT_SETTINGS } from "./types";
 
 export const VALID_OUTPUT_FPS = [4, 8, 10, 12, 15, 20, 25, 30] as const;
+export const ADAPTIVE_MAX_OUTPUT_RATE = "adaptive_max" as const;
 
-export function isAmbientOutputFps(value: unknown): value is AmbientOutputFps {
+export function isAmbientFixedOutputFps(
+  value: unknown
+): value is (typeof VALID_OUTPUT_FPS)[number] {
   return (
     typeof value === "number" &&
     (VALID_OUTPUT_FPS as readonly number[]).includes(value)
   );
+}
+
+export function isAdaptiveMax(rate: AmbientOutputRate): boolean {
+  return rate === ADAPTIVE_MAX_OUTPUT_RATE;
+}
+
+export function isAmbientOutputRate(value: unknown): value is AmbientOutputRate {
+  return isAmbientFixedOutputFps(value) || value === ADAPTIVE_MAX_OUTPUT_RATE;
+}
+
+export function formatOutputRate(rate: AmbientOutputRate): string {
+  if (isAdaptiveMax(rate)) return "Adaptive Max";
+  return `${rate} FPS`;
 }
 
 function clampRange(
@@ -55,7 +71,7 @@ export function mergeAmbientSettings(
       raw.quality === "performance" || raw.quality === "responsive_detail"
         ? raw.quality
         : DEFAULT_AMBIENT_SETTINGS.quality,
-    outputFps: isAmbientOutputFps(raw.outputFps)
+    outputFps: isAmbientOutputRate(raw.outputFps)
       ? raw.outputFps
       : DEFAULT_AMBIENT_SETTINGS.outputFps,
     edgePriority:

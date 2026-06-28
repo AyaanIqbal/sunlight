@@ -25,6 +25,15 @@ export async function verifyConnection(): Promise<ConnectionStatus> {
   return await invoke<ConnectionStatus>("verify_connection");
 }
 
+export async function listenConnectionStatus(
+  handler: (status: ConnectionStatus) => void
+): Promise<import("@tauri-apps/api/event").UnlistenFn> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<{ status: ConnectionStatus }>("connection://status", (e) =>
+    handler(e.payload.status)
+  );
+}
+
 export async function setColor(
   r: number,
   g: number,

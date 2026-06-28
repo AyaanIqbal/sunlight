@@ -2,6 +2,7 @@ import type { ConnectionStatus } from "./types";
 import {
   clearThrottledSends,
   getConnectionStatus,
+  listenConnectionStatus,
   reconnectLamp,
   refreshBluetooth as refreshBluetoothApi,
   setSendColorImpl,
@@ -18,9 +19,25 @@ interface ConnectionManagerConfig {
 }
 
 let config: ConnectionManagerConfig | null = null;
+let connectionListenerReady = false;
 
 export function initConnectionManager(cfg: ConnectionManagerConfig): void {
   config = cfg;
+
+  if (!connectionListenerReady) {
+    connectionListenerReady = true;
+    void listenConnectionStatus((status) => {
+      if (!config) return;
+      config.setStatus(status);
+      if (status === "connected") {
+        config.setError(null);
+      } else if (status === "stale" || status === "failed") {
+        config.setError("Connection is stale. Reconnecting…");
+      } else if (status === "reconnecting" || status === "connecting" || status === "scanning") {
+        config.setError(null);
+      }
+    });
+  }
 
   setSendColorImpl(async (r, g, b, brightness) => {
     if (!config) return { sent: false };
@@ -102,20 +119,26 @@ export async function verifyOnResume(): Promise<void> {
   if (current === "scanning" || current === "connecting" || current === "reconnecting") {
     return;
   }
+  if (current === "disconnected") {
+    return;
+  }
 
   try {
     const status = await verifyConnection();
     config.setStatus(status);
 
-    if (status === "stale" && config.getAutoConnect()) {
+    if (status === "stale" || status === "failed") {
       config.setStatus("reconnecting");
       try {
         await reconnectLamp();
         config.setStatus("connected");
+        config.setError(null);
       } catch (e: unknown) {
         const latest = await getConnectionStatus();
-        config.setStatus(latest === "connected" ? "connected" : "failed");
-        config.setError(formatConnectionError(e));
+        config.setStatus(latest === "connected" ? "connected" : latest);
+        if (latest !== "connected" && latest !== "reconnecting") {
+          config.setError(formatConnectionError(e));
+        }
       }
     }
   } catch {

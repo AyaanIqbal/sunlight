@@ -1,19 +1,42 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, arrayMove, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { ChevronDown, Play, Square } from "lucide-react";
 import type {
-  AmbientBrightnessMode,
   AmbientBrightnessResponse,
+  AmbientConfig,
   AmbientDebugMetrics,
-  AmbientEdgePriority,
-  AmbientOutputFps,
   AmbientQuality,
   AmbientSettings,
   AmbientStatus,
 } from "../types";
+import { DEFAULT_AMBIENT_SETTINGS } from "../types";
+import { formatOutputRate, isAdaptiveMax } from "../ambientDefaults";
+import {
+  createAmbientConfig,
+  findActiveConfig,
+  formatConfigSummary,
+} from "../ambientConfigUtils";
+import { AmbientConfigCard } from "./AmbientConfigCard";
+import { AmbientConfigEditorModal } from "./AmbientConfigEditorModal";
+import { AmbientSettingsForm } from "./AmbientSettingsForm";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface AmbientPanelProps {
   settings: AmbientSettings;
   onSettingsChange: (settings: AmbientSettings) => void;
+  ambientConfigs: AmbientConfig[];
+  ambientConfigOrder: string[];
+  onConfigsChange: (configs: AmbientConfig[]) => void;
+  onConfigOrderChange: (order: string[]) => void;
   status: AmbientStatus;
   connected: boolean;
   currentR: number;
@@ -27,38 +50,24 @@ interface AmbientPanelProps {
   onToast?: (message: string, variant?: "info" | "error") => void;
 }
 
-const QUALITY_OPTIONS: { id: AmbientQuality; label: string }[] = [
-  { id: "performance", label: "Performance" },
-  { id: "balanced", label: "Balanced" },
-  { id: "responsive_detail", label: "Responsive Detail" },
-];
+type ConfigModalState =
+  | { type: "save" }
+  | { type: "edit"; config: AmbientConfig }
+  | { type: "delete"; config: AmbientConfig }
+  | { type: "restoreDefaults" }
+  | null;
 
-const FPS_OPTIONS: { fps: AmbientOutputFps; subtitle?: string; helper?: string }[] = [
-  { fps: 4 },
-  { fps: 8 },
-  { fps: 10 },
-  { fps: 12, subtitle: "Smoother · more bandwidth" },
-  { fps: 15, subtitle: "Experimental · may be less stable" },
-  { fps: 20, subtitle: "Experimental · may use more Bluetooth bandwidth" },
-  { fps: 25, subtitle: "Experimental · may be less stable" },
-  {
-    fps: 30,
-    subtitle: "Experimental · lowest latency, may use more Bluetooth bandwidth",
-    helper: "Lowest latency. May be less stable on some Bluetooth devices.",
-  },
-];
+const QUALITY_LABELS: Record<AmbientQuality, string> = {
+  performance: "Performance",
+  balanced: "Balanced",
+  responsive_detail: "Responsive Detail",
+};
 
-const EDGE_OPTIONS: { id: AmbientEdgePriority; label: string }[] = [
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
-];
-
-const RESPONSE_OPTIONS: { id: AmbientBrightnessResponse; label: string }[] = [
-  { id: "dimmer", label: "Dimmer" },
-  { id: "balanced", label: "Balanced" },
-  { id: "brighter", label: "Brighter" },
-];
+const RESPONSE_LABELS: Record<AmbientBrightnessResponse, string> = {
+  dimmer: "Dimmer",
+  balanced: "Balanced",
+  brighter: "Brighter",
+};
 
 function statusLabel(status: AmbientStatus): string {
   switch (status) {
@@ -88,13 +97,6 @@ function statusColor(status: AmbientStatus): string {
   return "text-[#9090a0]";
 }
 
-function rangeTrackStyle(value: number, min: number, max: number, color = "#34d399") {
-  const pct = ((value - min) / (max - min)) * 100;
-  return {
-    background: `linear-gradient(90deg, ${color} ${pct}%, #2e2e38 ${pct}%)`,
-  } as const;
-}
-
 function brightnessPreviewLine(
   settings: AmbientSettings,
   manualBrightness: number,
@@ -109,38 +111,54 @@ function brightnessPreviewLine(
   return "Brightness: —";
 }
 
-const QUALITY_LABELS: Record<AmbientQuality, string> = {
-  performance: "Performance",
-  balanced: "Balanced",
-  responsive_detail: "Responsive Detail",
-};
-
-const RESPONSE_LABELS: Record<AmbientBrightnessResponse, string> = {
-  dimmer: "Dimmer",
-  balanced: "Balanced",
-  brighter: "Brighter",
-};
-
 function formatDebugSnapshot(
   settings: AmbientSettings,
   m: AmbientDebugMetrics,
   hex: string,
   r: number,
   g: number,
-  b: number
+  b: number,
+  activeConfigName?: string | null
 ): string {
-  return [
+  const lines = [
     "Ambient Debug Snapshot",
     "",
     "Ambient Settings",
     `Quality: ${QUALITY_LABELS[settings.quality]}`,
-    `Output FPS Target: ${m.targetOutputFps}`,
+    `Output Mode: ${formatOutputRate(settings.outputFps)}`,
+  ];
+  if (m.adaptiveModeEnabled && m.adaptiveTargetFps != null) {
+    lines.push(`Adaptive Target: ${Math.round(m.adaptiveTargetFps)} FPS`);
+    if (m.adaptiveState) {
+      lines.push(`Adaptive State: ${m.adaptiveState.replace(/_/g, " ")}`);
+    }
+    if (m.adaptiveReason) {
+      lines.push(`Last Adjustment: ${m.adaptiveReason}`);
+    }
+    if (m.adaptiveCaptureTargetFps != null) {
+      lines.push(`Capture Target FPS: ${Math.round(m.adaptiveCaptureTargetFps)}`);
+    }
+    if (m.adaptiveOutputTargetFps != null) {
+      lines.push(`Output Target FPS: ${Math.round(m.adaptiveOutputTargetFps)}`);
+    }
+    if (m.adaptiveFrameBudgetMs != null) {
+      lines.push(`Frame Budget: ${m.adaptiveFrameBudgetMs.toFixed(1)} ms`);
+    }
+  } else {
+    lines.push(`Output FPS Target: ${m.targetOutputFps}`);
+  }
+  lines.push(
     `Brightness Mode: ${settings.brightnessMode}`,
     `Brightness Response: ${RESPONSE_LABELS[settings.brightnessResponse]}`,
     `Black Threshold: ${settings.blackThreshold.toFixed(2)}`,
     `Center Contribution: ${settings.centerContribution.toFixed(2)}`,
     `Highlight Influence: ${settings.highlightInfluence.toFixed(2)}`,
-    `Min Color Delta: ${settings.minColorDelta}`,
+    `Min Color Delta: ${settings.minColorDelta}`
+  );
+  if (activeConfigName) {
+    lines.push(`Active Config: ${activeConfigName}`);
+  }
+  lines.push(
     "",
     `Capture FPS: ${m.captureFps.toFixed(1)}`,
     `Actual Output FPS: ${m.actualOutputFps.toFixed(1)}`,
@@ -153,19 +171,28 @@ function formatDebugSnapshot(
     `Duplicate Skips: ${m.skippedDueToDuplicate}`,
     `Busy Skips: ${m.bleBusySkips ?? 0}`,
     `Dropped Frames: ${m.droppedFrames ?? 0}`,
+    `Consecutive Capture Failures: ${m.consecutiveCaptureFailures ?? 0}`,
+    `Capture Timeouts: ${m.captureTimeouts ?? 0}`,
+    `Stale Captures Discarded: ${m.staleCaptureDiscarded ?? 0}`,
+    `Capture In Flight: ${m.captureInFlight ? "yes" : "no"}`,
+    `Capture Backoff: ${m.captureBackoffActive ? "yes" : "no"}`,
+    `Global BLE In Flight: ${m.globalBleWriteInFlight ?? 0}`,
+    `Global BLE Timeouts: ${m.globalBleWriteTimeoutCount ?? 0}`,
+    `Global BLE Gate Busy: ${m.globalBleWriteGateBusyCount ?? 0}`,
+    ...(m.adaptiveRecentBleFailureDelta != null
+      ? [`Adaptive BLE Failure Delta: ${m.adaptiveRecentBleFailureDelta}`]
+      : []),
+    ...(m.lastAmbientStopReason
+      ? [`Last Stop Reason: ${m.lastAmbientStopReason}`]
+      : []),
     `Screen Intensity: ${m.screenIntensity.toFixed(2)}`,
     `Computed Brightness: ${m.computedBrightness}/64`,
-    `Color: ${hex} RGB(${r}, ${g}, ${b})`,
-  ].join("\n");
+    `Color: ${hex} RGB(${r}, ${g}, ${b})`
+  );
+  return lines.join("\n");
 }
 
-function MetricSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
+function MetricSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="space-y-0.5">
       <div className="text-[9px] uppercase tracking-wider text-[#555568]">{title}</div>
@@ -177,6 +204,10 @@ function MetricSection({
 export function AmbientPanel({
   settings,
   onSettingsChange,
+  ambientConfigs,
+  ambientConfigOrder,
+  onConfigsChange,
+  onConfigOrderChange,
   status,
   connected,
   currentR,
@@ -190,16 +221,38 @@ export function AmbientPanel({
   onToast,
 }: AmbientPanelProps) {
   const [localSettings, setLocalSettings] = useState(settings);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [detailedMetricsOpen, setDetailedMetricsOpen] = useState(false);
+  const [modal, setModal] = useState<ConfigModalState>(null);
+  const [dragOverlayId, setDragOverlayId] = useState<string | null>(null);
   const running = status === "running" || status === "starting_capture";
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
 
   useEffect(() => {
     setLocalSettings(settings);
   }, [settings]);
 
-  const update = (patch: Partial<AmbientSettings>) => {
-    const next = { ...localSettings, ...patch };
+  const configMap = useMemo(
+    () => new Map(ambientConfigs.map((c) => [c.id, c])),
+    [ambientConfigs]
+  );
+
+  const orderedConfigs = useMemo(
+    () =>
+      ambientConfigOrder
+        .map((id) => configMap.get(id))
+        .filter((c): c is AmbientConfig => c != null),
+    [ambientConfigOrder, configMap]
+  );
+
+  const activeConfig = useMemo(
+    () => findActiveConfig(ambientConfigs, localSettings),
+    [ambientConfigs, localSettings]
+  );
+
+  const update = (next: AmbientSettings) => {
     setLocalSettings(next);
     onSettingsChange(next);
   };
@@ -214,6 +267,14 @@ export function AmbientPanel({
     ambientBrightness
   );
 
+  const adaptiveStatusText = useMemo(() => {
+    if (!isAdaptiveMax(localSettings.outputFps) || !running) return null;
+    if (debugMetrics?.adaptiveTargetFps != null) {
+      return `Adaptive Max is targeting ${Math.round(debugMetrics.adaptiveTargetFps)} FPS`;
+    }
+    return "Adaptive Max is tuning for the fastest stable response.";
+  }, [localSettings.outputFps, running, debugMetrics?.adaptiveTargetFps]);
+
   const handleCopyDebugSnapshot = async () => {
     if (!debugMetrics) return;
     const text = formatDebugSnapshot(
@@ -222,7 +283,8 @@ export function AmbientPanel({
       hex,
       currentR,
       currentG,
-      currentB
+      currentB,
+      activeConfig?.name
     );
     try {
       await navigator.clipboard.writeText(text);
@@ -231,6 +293,57 @@ export function AmbientPanel({
       onToast?.("Could not copy to clipboard.", "error");
     }
   };
+
+  const handleSaveConfig = (name: string, draftSettings: AmbientSettings) => {
+    if (modal?.type === "edit") {
+      const now = new Date().toISOString();
+      const updated = ambientConfigs.map((c) =>
+        c.id === modal.config.id
+          ? { ...c, name, settings: draftSettings, updatedAt: now }
+          : c
+      );
+      onConfigsChange(updated);
+      onToast?.(`Saved "${name}" config.`);
+    } else {
+      const config = createAmbientConfig(name, draftSettings);
+      onConfigsChange([...ambientConfigs, config]);
+      onConfigOrderChange([...ambientConfigOrder, config.id]);
+      onToast?.(`Saved "${name}" config.`);
+    }
+    setModal(null);
+  };
+
+  const handleApplyConfig = (config: AmbientConfig) => {
+    update(config.settings);
+    onToast?.(`Applied "${config.name}" config.`);
+  };
+
+  const handleDeleteConfig = (config: AmbientConfig) => {
+    onConfigsChange(ambientConfigs.filter((c) => c.id !== config.id));
+    onConfigOrderChange(ambientConfigOrder.filter((id) => id !== config.id));
+    setModal(null);
+    onToast?.(`Deleted "${config.name}" config.`);
+  };
+
+  const handleRestoreDefaults = () => {
+    update(DEFAULT_AMBIENT_SETTINGS);
+    setModal(null);
+    onToast?.("Ambient settings restored to defaults.");
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    setDragOverlayId(null);
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = ambientConfigOrder.indexOf(String(active.id));
+    const newIndex = ambientConfigOrder.indexOf(String(over.id));
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    onConfigOrderChange(arrayMove(ambientConfigOrder, oldIndex, newIndex));
+  };
+
+  const dragOverlayConfig = dragOverlayId ? configMap.get(dragOverlayId) : null;
 
   return (
     <div className="flex flex-col gap-3 min-h-0 overflow-y-auto pr-1">
@@ -282,332 +395,76 @@ export function AmbientPanel({
         </p>
       </div>
 
-      <div className="rounded-xl border border-[#2e2e38] bg-[#18181c] p-3 space-y-3">
-        <h4 className="text-[10px] uppercase tracking-wider text-[#555568]">Brightness</h4>
-
-        <label className="flex items-center justify-between text-[10px] text-[#9090a0] cursor-pointer">
-          <span>Dynamic Brightness</span>
-          <input
-            type="checkbox"
-            checked={localSettings.brightnessMode === "dynamic"}
-            onChange={(e) =>
-              update({
-                brightnessMode: (e.target.checked ? "dynamic" : "manual") as AmbientBrightnessMode,
-              })
-            }
-            className="accent-[#34d399]"
-          />
-        </label>
-
-        <div className="space-y-1.5">
-          <label className="text-[10px] text-[#9090a0]">Response</label>
-          <div className="flex rounded-lg border border-[#2e2e38] p-0.5 gap-0.5 flex-wrap">
-            {RESPONSE_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => update({ brightnessResponse: opt.id })}
-                className={`flex-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
-                  localSettings.brightnessResponse === opt.id
-                    ? "bg-[#2e2e38] text-[#f0f0f4]"
-                    : "text-[#555568] hover:text-[#9090a0]"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-[10px] text-[#9090a0]">
-            <span>Dimmer</span>
-            <span>Brighter</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={localSettings.brightnessResponseFineTune}
-            onChange={(e) =>
-              update({ brightnessResponseFineTune: Number(e.target.value) })
-            }
-            className="w-full"
-            style={rangeTrackStyle(localSettings.brightnessResponseFineTune, 0, 1)}
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-[10px] text-[#9090a0]">
-            <span>Black Threshold</span>
-            <span className="font-mono">{localSettings.blackThreshold.toFixed(2)}</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={0.2}
-            step={0.01}
-            value={localSettings.blackThreshold}
-            onChange={(e) => update({ blackThreshold: Number(e.target.value) })}
-            className="w-full"
-            style={rangeTrackStyle(localSettings.blackThreshold, 0, 0.2)}
-          />
-        </div>
-
+      <div className="flex gap-2">
         <button
           type="button"
-          onClick={() => setAdvancedOpen((o) => !o)}
-          className="flex w-full items-center justify-between text-[10px] text-[#9090a0] hover:text-[#f0f0f4] transition-colors pt-1"
+          onClick={() => setModal({ type: "save" })}
+          className="flex-1 rounded-lg border border-[#2e2e38] bg-[#18181c] px-3 py-2 text-xs font-medium text-[#9090a0] hover:text-[#f0f0f4] hover:border-[#555568] transition-colors"
         >
-          <span className="uppercase tracking-wider">Advanced Brightness</span>
-          <ChevronDown
-            size={14}
-            className={`transition-transform ${advancedOpen ? "rotate-180" : ""}`}
-          />
+          Save Config
         </button>
+        <button
+          type="button"
+          onClick={() => setModal({ type: "restoreDefaults" })}
+          className="flex-1 rounded-lg border border-[#2e2e38] bg-[#18181c] px-3 py-2 text-xs font-medium text-[#9090a0] hover:text-[#f0f0f4] hover:border-[#555568] transition-colors"
+        >
+          Restore Defaults
+        </button>
+      </div>
 
-        {advancedOpen && (
-          <div className="space-y-3 pt-1 border-t border-[#2e2e38]">
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-[10px] text-[#9090a0]">
-                <span>Min Active Brightness</span>
-                <span className="font-mono">{localSettings.minActiveBrightness}</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={20}
-                step={1}
-                value={localSettings.minActiveBrightness}
-                onChange={(e) =>
-                  update({ minActiveBrightness: Number(e.target.value) })
-                }
-                className="w-full"
-                style={rangeTrackStyle(localSettings.minActiveBrightness, 0, 20)}
-              />
-            </div>
+      <div className="rounded-xl border border-[#2e2e38] bg-[#18181c] p-3 space-y-2">
+        <h4 className="text-[10px] uppercase tracking-wider text-[#555568]">My Configs</h4>
 
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-[10px] text-[#9090a0]">
-                <span>Max Brightness</span>
-                <span className="font-mono">{localSettings.maxBrightness}</span>
+        {orderedConfigs.length === 0 ? (
+          <p className="text-[10px] text-[#555568] py-2">No saved configs yet.</p>
+        ) : (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={(e) => setDragOverlayId(String(e.active.id))}
+            onDragEnd={handleDragEnd}
+            onDragCancel={() => setDragOverlayId(null)}
+          >
+            <SortableContext
+              items={ambientConfigOrder}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="space-y-1.5">
+                {orderedConfigs.map((config) => (
+                  <AmbientConfigCard
+                    key={config.id}
+                    config={config}
+                    active={activeConfig?.id === config.id}
+                    onApply={() => handleApplyConfig(config)}
+                    onEdit={() => setModal({ type: "edit", config })}
+                    onDelete={() => setModal({ type: "delete", config })}
+                  />
+                ))}
               </div>
-              <input
-                type="range"
-                min={1}
-                max={64}
-                step={1}
-                value={localSettings.maxBrightness}
-                onChange={(e) => update({ maxBrightness: Number(e.target.value) })}
-                className="w-full"
-                style={rangeTrackStyle(localSettings.maxBrightness, 1, 64)}
-              />
-            </div>
+            </SortableContext>
 
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-[10px] text-[#9090a0]">
-                <span>Brightness Smoothing</span>
-                <span className="font-mono">
-                  {localSettings.brightnessSmoothing.toFixed(2)}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={0.05}
-                max={0.6}
-                step={0.01}
-                value={localSettings.brightnessSmoothing}
-                onChange={(e) =>
-                  update({ brightnessSmoothing: Number(e.target.value) })
-                }
-                className="w-full"
-                style={rangeTrackStyle(localSettings.brightnessSmoothing, 0.05, 0.6)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-[10px] text-[#9090a0]">
-                <span>Center Contribution</span>
-                <span className="font-mono">
-                  {localSettings.centerContribution.toFixed(2)}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={0.35}
-                step={0.01}
-                value={localSettings.centerContribution}
-                onChange={(e) =>
-                  update({ centerContribution: Number(e.target.value) })
-                }
-                className="w-full"
-                style={rangeTrackStyle(localSettings.centerContribution, 0, 0.35)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-[10px] text-[#9090a0]">
-                <span>Highlight Influence</span>
-                <span className="font-mono">
-                  {localSettings.highlightInfluence.toFixed(2)}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={0.6}
-                step={0.01}
-                value={localSettings.highlightInfluence}
-                onChange={(e) =>
-                  update({ highlightInfluence: Number(e.target.value) })
-                }
-                className="w-full"
-                style={rangeTrackStyle(localSettings.highlightInfluence, 0, 0.6)}
-              />
-            </div>
-          </div>
+            <DragOverlay>
+              {dragOverlayConfig ? (
+                <div className="rounded-lg border border-[#34d399]/40 bg-[#202028] px-3 py-2.5 shadow-xl opacity-90">
+                  <p className="text-xs font-medium text-[#f0f0f4]">{dragOverlayConfig.name}</p>
+                  <p className="text-[10px] text-[#555568]">
+                    {formatConfigSummary(dragOverlayConfig.settings)}
+                  </p>
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
         )}
       </div>
 
-      <div className="rounded-xl border border-[#2e2e38] bg-[#18181c] p-3 space-y-3">
-        <h4 className="text-[10px] uppercase tracking-wider text-[#555568]">Tuning</h4>
+      <AmbientSettingsForm
+        settings={localSettings}
+        onChange={update}
+        adaptiveStatusText={adaptiveStatusText}
+      />
 
-        <div className="space-y-1.5">
-          <label className="text-[10px] text-[#9090a0]">Quality</label>
-          <div className="flex rounded-lg border border-[#2e2e38] p-0.5 gap-0.5 flex-wrap">
-            {QUALITY_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => update({ quality: opt.id })}
-                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
-                  localSettings.quality === opt.id
-                    ? "bg-[#2e2e38] text-[#f0f0f4]"
-                    : "text-[#555568] hover:text-[#9090a0]"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-[10px] text-[#9090a0]">Output Rate</label>
-          <div className="flex flex-col gap-1">
-            <div className="flex rounded-lg border border-[#2e2e38] p-0.5 gap-0.5 flex-wrap">
-              {FPS_OPTIONS.map((opt) => (
-                <button
-                  key={opt.fps}
-                  type="button"
-                  onClick={() => update({ outputFps: opt.fps })}
-                  className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
-                    localSettings.outputFps === opt.fps
-                      ? "bg-[#2e2e38] text-[#f0f0f4]"
-                      : "text-[#555568] hover:text-[#9090a0]"
-                  }`}
-                >
-                  {opt.fps} FPS
-                </button>
-              ))}
-            </div>
-            {FPS_OPTIONS.filter((o) => o.subtitle).map((opt) =>
-              localSettings.outputFps === opt.fps ? (
-                <div key={opt.fps} className="space-y-0.5 pl-0.5">
-                  <p className="text-[9px] text-[#555568]">{opt.subtitle}</p>
-                  {opt.helper ? (
-                    <p className="text-[9px] text-[#555568]">{opt.helper}</p>
-                  ) : null}
-                </div>
-              ) : null
-            )}
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-[10px] text-[#9090a0]">Edge Priority</label>
-          <div className="flex rounded-lg border border-[#2e2e38] p-0.5 gap-0.5">
-            {EDGE_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => update({ edgePriority: opt.id })}
-                className={`flex-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
-                  localSettings.edgePriority === opt.id
-                    ? "bg-[#2e2e38] text-[#f0f0f4]"
-                    : "text-[#555568] hover:text-[#9090a0]"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-[10px] text-[#9090a0]">
-            <span>Saturation Boost</span>
-            <span className="font-mono">{localSettings.saturationBoost.toFixed(2)}</span>
-          </div>
-          <input
-            type="range"
-            min={0.8}
-            max={2.2}
-            step={0.05}
-            value={localSettings.saturationBoost}
-            onChange={(e) => update({ saturationBoost: Number(e.target.value) })}
-            className="w-full"
-            style={rangeTrackStyle(localSettings.saturationBoost, 0.8, 2.2)}
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-[10px] text-[#9090a0]">
-            <span>RGB Brightness Boost</span>
-            <span className="font-mono">{localSettings.brightnessBoost.toFixed(2)}</span>
-          </div>
-          <input
-            type="range"
-            min={0.8}
-            max={1.6}
-            step={0.05}
-            value={localSettings.brightnessBoost}
-            onChange={(e) => update({ brightnessBoost: Number(e.target.value) })}
-            className="w-full"
-            style={rangeTrackStyle(localSettings.brightnessBoost, 0.8, 1.6)}
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-[10px] text-[#9090a0]">
-            <span>RGB Smoothing</span>
-            <span>Responsive</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={localSettings.responsiveness}
-            onChange={(e) => update({ responsiveness: Number(e.target.value) })}
-            className="w-full"
-            style={rangeTrackStyle(localSettings.responsiveness, 0, 1)}
-          />
-        </div>
-
-        <label className="flex items-center justify-between text-[10px] text-[#9090a0] cursor-pointer">
-          <span>Debug metrics</span>
-          <input
-            type="checkbox"
-            checked={localSettings.debug}
-            onChange={(e) => update({ debug: e.target.checked })}
-            className="accent-[#34d399]"
-          />
-        </label>
-
-        {localSettings.debug && debugMetrics && (
+      {localSettings.debug && debugMetrics && (
+        <div className="rounded-xl border border-[#2e2e38] bg-[#18181c] p-3 space-y-2">
           <div className="rounded-lg border border-[#2e2e38] bg-[#111114] p-2 text-[10px] font-mono text-[#9090a0] space-y-2">
             <MetricSection title="Capture">
               <div>Capture FPS: {debugMetrics.captureFps.toFixed(1)}</div>
@@ -633,6 +490,41 @@ export function AmbientPanel({
                 <div>Algorithm: {debugMetrics.algorithmTimeMsAvg.toFixed(1)} ms avg</div>
               )}
             </MetricSection>
+
+            {debugMetrics.adaptiveModeEnabled && (
+              <MetricSection title="Adaptive Max">
+                <div>
+                  Adaptive target:{" "}
+                  {debugMetrics.adaptiveTargetFps != null
+                    ? `${Math.round(debugMetrics.adaptiveTargetFps)} FPS`
+                    : "—"}
+                </div>
+                <div>
+                  Capture target:{" "}
+                  {debugMetrics.adaptiveCaptureTargetFps != null
+                    ? `${Math.round(debugMetrics.adaptiveCaptureTargetFps)} FPS`
+                    : "—"}
+                </div>
+                <div>
+                  Output target:{" "}
+                  {debugMetrics.adaptiveOutputTargetFps != null
+                    ? `${Math.round(debugMetrics.adaptiveOutputTargetFps)} FPS`
+                    : "—"}
+                </div>
+                <div>State: {debugMetrics.adaptiveState?.replace(/_/g, " ") ?? "—"}</div>
+                {debugMetrics.adaptiveReason && (
+                  <div>Last adjustment: {debugMetrics.adaptiveReason}</div>
+                )}
+                {debugMetrics.adaptiveFrameBudgetMs != null && (
+                  <div>Frame budget: {debugMetrics.adaptiveFrameBudgetMs.toFixed(1)} ms</div>
+                )}
+                {debugMetrics.adaptiveStabilityScore != null && (
+                  <div>
+                    Stability score: {debugMetrics.adaptiveStabilityScore.toFixed(0)}
+                  </div>
+                )}
+              </MetricSection>
+            )}
 
             <MetricSection title="Output">
               <div>Target output FPS: {debugMetrics.targetOutputFps}</div>
@@ -723,8 +615,47 @@ export function AmbientPanel({
               Copy Debug Snapshot
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      <AmbientConfigEditorModal
+        open={modal?.type === "save" || modal?.type === "edit"}
+        mode={modal?.type === "edit" ? "edit" : "save"}
+        initialName={modal?.type === "edit" ? modal.config.name : ""}
+        initialSettings={
+          modal?.type === "edit"
+            ? modal.config.settings
+            : modal?.type === "save"
+              ? localSettings
+              : DEFAULT_AMBIENT_SETTINGS
+        }
+        onSave={handleSaveConfig}
+        onCancel={() => setModal(null)}
+        onValidationError={(msg) => onToast?.(msg, "error")}
+      />
+
+      <ConfirmDialog
+        open={modal?.type === "delete"}
+        title={
+          modal?.type === "delete" ? `Delete "${modal.config.name}"?` : ""
+        }
+        message="This cannot be undone."
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => {
+          if (modal?.type === "delete") handleDeleteConfig(modal.config);
+        }}
+        onCancel={() => setModal(null)}
+      />
+
+      <ConfirmDialog
+        open={modal?.type === "restoreDefaults"}
+        title="Restore Ambient settings to defaults?"
+        message="Your saved configs will not be deleted."
+        confirmLabel="Restore Defaults"
+        onConfirm={handleRestoreDefaults}
+        onCancel={() => setModal(null)}
+      />
     </div>
   );
 }

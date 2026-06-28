@@ -26,17 +26,43 @@ interface ToastProps {
 }
 
 export function Toast({ toast }: ToastProps) {
-  if (!toast) return null;
+  const [rendered, setRendered] = useState<ToastState | null>(null);
+  const [isExiting, setIsExiting] = useState(false);
+
+  useEffect(() => {
+    if (toast) {
+      setRendered(toast);
+      setIsExiting(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (!toast && rendered) {
+      setIsExiting(true);
+    }
+  }, [toast, rendered]);
+
+  const handleAnimationEnd = () => {
+    if (!isExiting) return;
+    setRendered(null);
+    setIsExiting(false);
+  };
+
+  if (!rendered) return null;
 
   return (
     <div
-      className={`fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-lg border px-4 py-2 text-xs shadow-2xl max-w-md ${
-        toast.variant === "error"
+      key={`${rendered.message}-${rendered.variant}`}
+      className={`fixed bottom-4 left-1/2 z-[60] rounded-lg border px-4 py-2 text-xs shadow-2xl max-w-md ${
+        isExiting ? "toast-exit" : "toast-enter"
+      } ${
+        rendered.variant === "error"
           ? "border-red-500/30 bg-[#1e1e24] text-[#f87171]"
           : "border-[#2e2e38] bg-[#1e1e24] text-[#9090a0]"
       }`}
+      onAnimationEnd={handleAnimationEnd}
     >
-      {toast.message}
+      {rendered.message}
     </div>
   );
 }

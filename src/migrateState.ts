@@ -1,6 +1,7 @@
 import type { AppState } from "./types";
 import { DEFAULT_AMBIENT_SETTINGS } from "./types";
 import { mergeAmbientSettings } from "./ambientDefaults";
+import { migrateAmbientConfigs, seedAmbientDefaults } from "./ambientConfigUtils";
 import { seedDefaults } from "./presets";
 import { seedLoopDefaults, ensureDefaultLoopSections } from "./loops";
 
@@ -11,6 +12,11 @@ export function migrateAppState(raw: Partial<AppState> | null): AppState | null 
 
   const needsLoopMigration = raw.loops === undefined && raw.loopSections === undefined;
   const { loops: defaultLoops, loopSections: defaultLoopSections } = seedLoopDefaults();
+
+  const { configs: ambientConfigs, order: ambientConfigOrder } = migrateAmbientConfigs(
+    raw.ambientConfigs,
+    raw.ambientConfigOrder
+  );
 
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -30,12 +36,15 @@ export function migrateAppState(raw: Partial<AppState> | null): AppState | null 
     loopSections: needsLoopMigration
       ? defaultLoopSections
       : ensureDefaultLoopSections(raw.loopSections ?? []),
+    ambientConfigs,
+    ambientConfigOrder,
   };
 }
 
 export function createFreshAppState(): AppState {
   const { presets, sections } = seedDefaults();
   const { loops, loopSections } = seedLoopDefaults();
+  const { configs: ambientConfigs, order: ambientConfigOrder } = seedAmbientDefaults();
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     settings: {
@@ -52,5 +61,7 @@ export function createFreshAppState(): AppState {
     presets,
     loops,
     loopSections,
+    ambientConfigs,
+    ambientConfigOrder,
   };
 }

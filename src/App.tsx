@@ -4,6 +4,7 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { Settings } from "lucide-react";
 import type {
+  AmbientConfig,
   AmbientDebugMetrics,
   AmbientSettings,
   AmbientStatus,
@@ -84,6 +85,8 @@ export default function App() {
   const [runningLoopId, setRunningLoopId] = useState<string | null>(null);
   const [runningLoopName, setRunningLoopName] = useState<string | null>(null);
   const [ambientSettings, setAmbientSettings] = useState<AmbientSettings>(DEFAULT_AMBIENT_SETTINGS);
+  const [ambientConfigs, setAmbientConfigs] = useState<AmbientConfig[]>([]);
+  const [ambientConfigOrder, setAmbientConfigOrder] = useState<string[]>([]);
   const [ambientStatus, setAmbientStatus] = useState<AmbientStatus>("inactive");
   const [ambientDebugMetrics, setAmbientDebugMetrics] =
     useState<AmbientDebugMetrics | null>(null);
@@ -205,6 +208,7 @@ export default function App() {
         setAmbientBrightness(null);
         setAmbientDebugMetrics(null);
         if (reason === "connection_lost") {
+          void verifyOnResume();
           showToast(
             message ??
               "Ambient Mode stopped because the lamp connection became stale.",
@@ -285,6 +289,8 @@ export default function App() {
         setTransitionEnabled(state.settings.transitionEnabled ?? true);
         setTransitionDurationMs(state.settings.transitionDurationMs ?? 1200);
         setAmbientSettings(state.settings.ambient ?? DEFAULT_AMBIENT_SETTINGS);
+        setAmbientConfigs(state.ambientConfigs ?? []);
+        setAmbientConfigOrder(state.ambientConfigOrder ?? []);
         setWorkspace("presets");
         setPresets(state.presets);
         setSections(state.sections);
@@ -305,6 +311,8 @@ export default function App() {
         const fresh = createFreshAppState();
         setWorkspace("presets");
         setAmbientSettings(fresh.settings.ambient ?? DEFAULT_AMBIENT_SETTINGS);
+        setAmbientConfigs(fresh.ambientConfigs ?? []);
+        setAmbientConfigOrder(fresh.ambientConfigOrder ?? []);
         setPresets(fresh.presets);
         setSections(fresh.sections);
         setLoops(fresh.loops);
@@ -333,6 +341,8 @@ export default function App() {
         presets,
         loopSections,
         loops,
+        ambientConfigs,
+        ambientConfigOrder,
       };
       saveAppState(state);
     }, 500);
@@ -351,6 +361,8 @@ export default function App() {
     presets,
     loopSections,
     loops,
+    ambientConfigs,
+    ambientConfigOrder,
   ]);
 
   useEffect(() => {
@@ -509,6 +521,8 @@ export default function App() {
     setTransitionEnabled(data.settings.transitionEnabled);
     setTransitionDurationMs(data.settings.transitionDurationMs);
     setAmbientSettings(data.settings.ambient ?? DEFAULT_AMBIENT_SETTINGS);
+    setAmbientConfigs(data.ambientConfigs ?? []);
+    setAmbientConfigOrder(data.ambientConfigOrder ?? []);
     setWorkspace(data.settings.activeWorkspace ?? "presets");
     setPresets(data.presets);
     setSections(data.sections);
@@ -536,6 +550,8 @@ export default function App() {
         presets,
         loopSections,
         loops,
+        ambientConfigs,
+        ambientConfigOrder,
       };
       const bundle = buildExportBundle(state);
       const path = await save({
@@ -696,6 +712,10 @@ export default function App() {
             ambientStatus={ambientStatus}
             ambientSettings={ambientSettings}
             onAmbientSettingsChange={handleAmbientSettingsChange}
+            ambientConfigs={ambientConfigs}
+            ambientConfigOrder={ambientConfigOrder}
+            onAmbientConfigsChange={setAmbientConfigs}
+            onAmbientConfigOrderChange={setAmbientConfigOrder}
             ambientDebugMetrics={ambientDebugMetrics}
             ambientBrightness={ambientBrightness}
             manualBrightness={brightness}

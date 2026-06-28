@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Plus, FolderPlus, Square } from "lucide-react";
 import type {
+  AmbientConfig,
   AmbientDebugMetrics,
   AmbientSettings,
   AmbientStatus,
@@ -34,6 +35,10 @@ interface RightWorkspacePanelProps {
   ambientStatus: AmbientStatus;
   ambientSettings: AmbientSettings;
   onAmbientSettingsChange: (settings: AmbientSettings) => void;
+  ambientConfigs: AmbientConfig[];
+  ambientConfigOrder: string[];
+  onAmbientConfigsChange: (configs: AmbientConfig[]) => void;
+  onAmbientConfigOrderChange: (order: string[]) => void;
   ambientDebugMetrics: AmbientDebugMetrics | null;
   ambientBrightness: number | null;
   manualBrightness: number;
@@ -70,6 +75,10 @@ export function RightWorkspacePanel({
   ambientStatus,
   ambientSettings,
   onAmbientSettingsChange,
+  ambientConfigs,
+  ambientConfigOrder,
+  onAmbientConfigsChange,
+  onAmbientConfigOrderChange,
   ambientDebugMetrics,
   ambientBrightness,
   manualBrightness,
@@ -226,6 +235,10 @@ export function RightWorkspacePanel({
         <AmbientPanel
           settings={ambientSettings}
           onSettingsChange={onAmbientSettingsChange}
+          ambientConfigs={ambientConfigs}
+          ambientConfigOrder={ambientConfigOrder}
+          onConfigsChange={onAmbientConfigsChange}
+          onConfigOrderChange={onAmbientConfigOrderChange}
           status={ambientStatus}
           connected={connected}
           currentR={currentR}

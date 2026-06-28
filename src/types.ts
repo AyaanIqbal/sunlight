@@ -10,7 +10,10 @@ export type ConnectionStatus =
 export type WorkspaceTab = "presets" | "loops" | "ambient";
 
 export type AmbientQuality = "performance" | "balanced" | "responsive_detail";
-export type AmbientOutputFps = 4 | 8 | 10 | 12 | 15 | 20 | 25 | 30;
+export type AmbientFixedOutputFps = 4 | 8 | 10 | 12 | 15 | 20 | 25 | 30;
+export type AmbientOutputRate = AmbientFixedOutputFps | "adaptive_max";
+/** @deprecated Use AmbientOutputRate */
+export type AmbientOutputFps = AmbientFixedOutputFps;
 export type AmbientEdgePriority = "low" | "medium" | "high";
 export type AmbientBrightnessMode = "manual" | "dynamic";
 export type AmbientBrightnessResponse = "dimmer" | "balanced" | "brighter";
@@ -26,7 +29,7 @@ export type AmbientStatus =
 
 export interface AmbientSettings {
   quality: AmbientQuality;
-  outputFps: AmbientOutputFps;
+  outputFps: AmbientOutputRate;
   edgePriority: AmbientEdgePriority;
   saturationBoost: number;
   brightnessBoost: number;
@@ -63,6 +66,34 @@ export const DEFAULT_AMBIENT_SETTINGS: AmbientSettings = {
   centerContribution: 0.15,
   highlightInfluence: 0.3,
 };
+
+export const MOVIE_AMBIENT_SETTINGS: AmbientSettings = {
+  quality: "responsive_detail",
+  outputFps: 30,
+  edgePriority: "high",
+  saturationBoost: 2,
+  brightnessBoost: 1.1,
+  responsiveness: 0.85,
+  minColorDelta: 10,
+  debug: true,
+  brightnessMode: "dynamic",
+  brightnessResponse: "balanced",
+  brightnessResponseFineTune: 1,
+  blackThreshold: 0.14,
+  minActiveBrightness: 1,
+  maxBrightness: 64,
+  brightnessSmoothing: 0.6,
+  centerContribution: 0.22,
+  highlightInfluence: 0.24,
+};
+
+export interface AmbientConfig {
+  id: string;
+  name: string;
+  settings: AmbientSettings;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface AmbientFrameEvent {
   r: number;
@@ -112,6 +143,25 @@ export interface AmbientDebugMetrics {
   blackThreshold?: number;
   centerContribution?: number;
   highlightInfluence?: number;
+  adaptiveModeEnabled?: boolean;
+  adaptiveTargetFps?: number;
+  adaptiveCaptureTargetFps?: number;
+  adaptiveOutputTargetFps?: number;
+  adaptiveState?: "warming_up" | "stable" | "increasing" | "decreasing" | "limited";
+  adaptiveReason?: string;
+  adaptiveLastAdjustmentAt?: string;
+  adaptiveFrameBudgetMs?: number;
+  adaptiveStabilityScore?: number;
+  consecutiveCaptureFailures?: number;
+  captureTimeouts?: number;
+  staleCaptureDiscarded?: number;
+  captureInFlight?: boolean;
+  captureBackoffActive?: boolean;
+  lastAmbientStopReason?: string;
+  globalBleWriteInFlight?: number;
+  globalBleWriteTimeoutCount?: number;
+  globalBleWriteGateBusyCount?: number;
+  adaptiveRecentBleFailureDelta?: number;
 }
 export type TransitionType = "smooth" | "instant";
 
@@ -195,6 +245,8 @@ export interface AppState {
   presets: LampPreset[];
   loopSections: LoopSection[];
   loops: LampLoop[];
+  ambientConfigs?: AmbientConfig[];
+  ambientConfigOrder?: string[];
 }
 
 export interface ExportBundle {
@@ -206,4 +258,6 @@ export interface ExportBundle {
   presets: LampPreset[];
   loopSections: LoopSection[];
   loops: LampLoop[];
+  ambientConfigs?: AmbientConfig[];
+  ambientConfigOrder?: string[];
 }

@@ -38,9 +38,36 @@ let stopping = false;
 let listenersReady = false;
 let unlisteners: Array<() => void> = [];
 let preAmbientState: PreAmbientState | null = null;
+let lastFrameAt = 0;
+let statusWatchdog: ReturnType<typeof setInterval> | null = null;
+
+const FRAME_STALE_MS = 15_000;
+const STATUS_SYNC_INTERVAL_MS = 5_000;
 
 function isActiveAmbientStatus(status: AmbientStatus): boolean {
   return status === "running" || status === "starting_capture";
+}
+
+function startStatusWatchdog(): void {
+  if (statusWatchdog) return;
+  statusWatchdog = setInterval(() => {
+    if (!running || stopping) return;
+    const frameStale = lastFrameAt > 0 && Date.now() - lastFrameAt > FRAME_STALE_MS;
+    if (!frameStale) return;
+    void syncAmbientStatus().then((status) => {
+      if (!isActiveAmbientStatus(status)) {
+        running = false;
+        callbacks?.onStatusChange(status);
+      }
+    });
+  }, STATUS_SYNC_INTERVAL_MS);
+}
+
+function stopStatusWatchdog(): void {
+  if (statusWatchdog) {
+    clearInterval(statusWatchdog);
+    statusWatchdog = null;
+  }
 }
 
 export function initAmbientRunner(cbs: AmbientRunnerCallbacks): void {
@@ -55,6 +82,7 @@ async function setupListeners(): Promise<void> {
   const unsubs = await Promise.all([
     listenAmbientFrame((frame) => {
       if (!running || stopping) return;
+      lastFrameAt = Date.now();
       callbacks?.onColorChange({ r: frame.r, g: frame.g, b: frame.b });
       callbacks?.onFrameMetrics?.(frame);
     }),
@@ -63,16 +91,27 @@ async function setupListeners(): Promise<void> {
       callbacks?.onDebugMetrics?.(metrics);
     }),
     listenAmbientStatus((status) => {
-      if (stopping || (!running && isActiveAmbientStatus(status))) return;
+      if (stopping) {
+        if (status === "stopped" || status === "inactive" || status === "failed") {
+          running = false;
+        }
+        return;
+      }
+      if (!running && isActiveAmbientStatus(status)) return;
       running = isActiveAmbientStatus(status);
       callbacks?.onStatusChange(status);
       if (status === "stopped" || status === "inactive" || status === "failed") {
         running = false;
+        stopStatusWatchdog();
+      }
+      if (isActiveAmbientStatus(status)) {
+        startStatusWatchdog();
       }
     }),
     listenAmbientStopped((event: AmbientStoppedEvent) => {
-      if (stopping) return;
       running = false;
+      stopping = false;
+      stopStatusWatchdog();
       callbacks?.onStatusChange("stopped");
       if (event.reason !== "user") {
         preAmbientState = null;
@@ -101,16 +140,19 @@ export async function startAmbient(
   }
 
   stopping = false;
+  lastFrameAt = Date.now();
 
   try {
     await ambientStart(settings, brightness);
     preAmbientState = callbacks.capturePreAmbientState?.() ?? null;
     running = true;
+    startStatusWatchdog();
     return { ok: true };
   } catch (e: unknown) {
     running = false;
     stopping = false;
     preAmbientState = null;
+    stopStatusWatchdog();
     callbacks.onStatusChange("failed");
     const message =
       typeof e === "string"
@@ -123,12 +165,13 @@ export async function startAmbient(
 export async function stopAmbient(reason: AmbientStopReason = "user"): Promise<void> {
   stopping = true;
   running = false;
+  stopStatusWatchdog();
   callbacks?.onStatusChange("stopped");
 
   try {
     await ambientStop();
   } catch {
-    // ignore stop errors
+    // Backend may already be stopped; still clear frontend state.
   } finally {
     stopping = false;
   }
@@ -152,6 +195,9 @@ export async function syncAmbientStatus(): Promise<AmbientStatus> {
   if (!stopping) {
     running = isActiveAmbientStatus(status);
     callbacks?.onStatusChange(status);
+    if (!running) {
+      stopStatusWatchdog();
+    }
   }
   return status;
 }
@@ -163,4 +209,6 @@ export function teardownAmbientRunner(): void {
   running = false;
   stopping = false;
   preAmbientState = null;
+  stopStatusWatchdog();
+  lastFrameAt = 0;
 }

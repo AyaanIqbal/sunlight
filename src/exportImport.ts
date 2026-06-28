@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import type {
+  AmbientConfig,
   AmbientSettings,
   AppState,
   ExportBundle,
@@ -12,6 +13,11 @@ import type {
 } from "./types";
 import { DEFAULT_AMBIENT_SETTINGS } from "./types";
 import { mergeAmbientSettings } from "./ambientDefaults";
+import {
+  dedupeAmbientConfigIds,
+  migrateAmbientConfigs,
+  parseAmbientConfig,
+} from "./ambientConfigUtils";
 import { seedDefaults } from "./presets";
 import { seedLoopDefaults } from "./loops";
 
@@ -28,6 +34,8 @@ export function buildExportBundle(state: AppState): ExportBundle {
     presets: state.presets,
     loopSections: state.loopSections,
     loops: state.loops,
+    ambientConfigs: state.ambientConfigs ?? [],
+    ambientConfigOrder: state.ambientConfigOrder ?? [],
   };
 }
 
@@ -380,6 +388,21 @@ export function validateImportBundle(
       ? dedupeLoopIds(loops, loopSections)
       : { loops: defaultLoops, loopSections: defaultLoopSections };
 
+  const rawAmbientConfigs =
+    schemaVersion === 2 && Array.isArray(raw.ambientConfigs) ? raw.ambientConfigs : [];
+  const rawAmbientConfigOrder =
+    schemaVersion === 2 && Array.isArray(raw.ambientConfigOrder)
+      ? raw.ambientConfigOrder
+      : [];
+  const parsedConfigs = rawAmbientConfigs
+    .map(parseAmbientConfig)
+    .filter((c): c is AmbientConfig => c !== null);
+  const dedupedConfigs = dedupeAmbientConfigIds(parsedConfigs);
+  const { configs: ambientConfigs, order: ambientConfigOrder } = migrateAmbientConfigs(
+    dedupedConfigs,
+    rawAmbientConfigOrder
+  );
+
   return {
     ok: true,
     data: {
@@ -395,6 +418,8 @@ export function validateImportBundle(
         normalizedLoops.loopSections.length > 0
           ? normalizedLoops.loopSections
           : defaultLoopSections,
+      ambientConfigs,
+      ambientConfigOrder,
     },
   };
 }
