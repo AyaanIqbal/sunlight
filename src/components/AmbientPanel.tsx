@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ChevronDown, Play, Square } from "lucide-react";
 import type {
   AmbientBrightnessMode,
   AmbientBrightnessResponse,
+  AmbientDebugMetrics,
   AmbientEdgePriority,
-  AmbientFrameEvent,
   AmbientOutputFps,
   AmbientQuality,
   AmbientSettings,
@@ -21,7 +21,7 @@ interface AmbientPanelProps {
   currentB: number;
   manualBrightness: number;
   ambientBrightness: number | null;
-  metrics: AmbientFrameEvent | null;
+  debugMetrics: AmbientDebugMetrics | null;
   onStart: () => void;
   onStop: () => void;
   onToast?: (message: string, variant?: "info" | "error") => void;
@@ -33,12 +33,19 @@ const QUALITY_OPTIONS: { id: AmbientQuality; label: string }[] = [
   { id: "responsive_detail", label: "Responsive Detail" },
 ];
 
-const FPS_OPTIONS: { fps: AmbientOutputFps; subtitle?: string }[] = [
+const FPS_OPTIONS: { fps: AmbientOutputFps; subtitle?: string; helper?: string }[] = [
   { fps: 4 },
   { fps: 8 },
   { fps: 10 },
   { fps: 12, subtitle: "Smoother · more bandwidth" },
   { fps: 15, subtitle: "Experimental · may be less stable" },
+  { fps: 20, subtitle: "Experimental · may use more Bluetooth bandwidth" },
+  { fps: 25, subtitle: "Experimental · may be less stable" },
+  {
+    fps: 30,
+    subtitle: "Experimental · lowest latency, may use more Bluetooth bandwidth",
+    helper: "Lowest latency. May be less stable on some Bluetooth devices.",
+  },
 ];
 
 const EDGE_OPTIONS: { id: AmbientEdgePriority; label: string }[] = [
@@ -91,17 +98,80 @@ function rangeTrackStyle(value: number, min: number, max: number, color = "#34d3
 function brightnessPreviewLine(
   settings: AmbientSettings,
   manualBrightness: number,
-  ambientBrightness: number | null,
-  metrics: AmbientFrameEvent | null
+  ambientBrightness: number | null
 ): string {
   if (settings.brightnessMode === "manual") {
     return `Brightness: Manual (${manualBrightness}/64)`;
   }
-  const computed = ambientBrightness ?? metrics?.computedBrightness;
-  if (computed != null) {
-    return `Brightness: ${computed}/64`;
+  if (ambientBrightness != null) {
+    return `Brightness: ${ambientBrightness}/64`;
   }
   return "Brightness: —";
+}
+
+const QUALITY_LABELS: Record<AmbientQuality, string> = {
+  performance: "Performance",
+  balanced: "Balanced",
+  responsive_detail: "Responsive Detail",
+};
+
+const RESPONSE_LABELS: Record<AmbientBrightnessResponse, string> = {
+  dimmer: "Dimmer",
+  balanced: "Balanced",
+  brighter: "Brighter",
+};
+
+function formatDebugSnapshot(
+  settings: AmbientSettings,
+  m: AmbientDebugMetrics,
+  hex: string,
+  r: number,
+  g: number,
+  b: number
+): string {
+  return [
+    "Ambient Debug Snapshot",
+    "",
+    "Ambient Settings",
+    `Quality: ${QUALITY_LABELS[settings.quality]}`,
+    `Output FPS Target: ${m.targetOutputFps}`,
+    `Brightness Mode: ${settings.brightnessMode}`,
+    `Brightness Response: ${RESPONSE_LABELS[settings.brightnessResponse]}`,
+    `Black Threshold: ${settings.blackThreshold.toFixed(2)}`,
+    `Center Contribution: ${settings.centerContribution.toFixed(2)}`,
+    `Highlight Influence: ${settings.highlightInfluence.toFixed(2)}`,
+    `Min Color Delta: ${settings.minColorDelta}`,
+    "",
+    `Capture FPS: ${m.captureFps.toFixed(1)}`,
+    `Actual Output FPS: ${m.actualOutputFps.toFixed(1)}`,
+    `Capture Time Avg: ${m.captureTimeMsAvg.toFixed(1)}ms`,
+    `Processing Time Avg: ${m.processingTimeMsAvg.toFixed(1)}ms`,
+    `BLE Write Time Avg: ${m.bleWriteTimeMsAvg.toFixed(1)}ms`,
+    `BLE Failures: ${m.bleWriteFailures}`,
+    `Delta Skips: ${m.skippedDueToDelta}`,
+    `Rate Limit Skips: ${m.skippedDueToRateLimit}`,
+    `Duplicate Skips: ${m.skippedDueToDuplicate}`,
+    `Busy Skips: ${m.bleBusySkips ?? 0}`,
+    `Dropped Frames: ${m.droppedFrames ?? 0}`,
+    `Screen Intensity: ${m.screenIntensity.toFixed(2)}`,
+    `Computed Brightness: ${m.computedBrightness}/64`,
+    `Color: ${hex} RGB(${r}, ${g}, ${b})`,
+  ].join("\n");
+}
+
+function MetricSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-0.5">
+      <div className="text-[9px] uppercase tracking-wider text-[#555568]">{title}</div>
+      {children}
+    </div>
+  );
 }
 
 export function AmbientPanel({
@@ -114,12 +184,14 @@ export function AmbientPanel({
   currentB,
   manualBrightness,
   ambientBrightness,
-  metrics,
+  debugMetrics,
   onStart,
   onStop,
+  onToast,
 }: AmbientPanelProps) {
   const [localSettings, setLocalSettings] = useState(settings);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [detailedMetricsOpen, setDetailedMetricsOpen] = useState(false);
   const running = status === "running" || status === "starting_capture";
 
   useEffect(() => {
@@ -139,9 +211,26 @@ export function AmbientPanel({
   const brightnessLine = brightnessPreviewLine(
     localSettings,
     manualBrightness,
-    ambientBrightness,
-    metrics
+    ambientBrightness
   );
+
+  const handleCopyDebugSnapshot = async () => {
+    if (!debugMetrics) return;
+    const text = formatDebugSnapshot(
+      localSettings,
+      debugMetrics,
+      hex,
+      currentR,
+      currentG,
+      currentB
+    );
+    try {
+      await navigator.clipboard.writeText(text);
+      onToast?.("Debug snapshot copied to clipboard.");
+    } catch {
+      onToast?.("Could not copy to clipboard.", "error");
+    }
+  };
 
   return (
     <div className="flex flex-col gap-3 min-h-0 overflow-y-auto pr-1">
@@ -426,9 +515,12 @@ export function AmbientPanel({
             </div>
             {FPS_OPTIONS.filter((o) => o.subtitle).map((opt) =>
               localSettings.outputFps === opt.fps ? (
-                <p key={opt.fps} className="text-[9px] text-[#555568] pl-0.5">
-                  {opt.subtitle}
-                </p>
+                <div key={opt.fps} className="space-y-0.5 pl-0.5">
+                  <p className="text-[9px] text-[#555568]">{opt.subtitle}</p>
+                  {opt.helper ? (
+                    <p className="text-[9px] text-[#555568]">{opt.helper}</p>
+                  ) : null}
+                </div>
               ) : null
             )}
           </div>
@@ -515,26 +607,121 @@ export function AmbientPanel({
           />
         </label>
 
-        {settings.debug && metrics && (
-          <div className="rounded-lg border border-[#2e2e38] bg-[#111114] p-2 text-[10px] font-mono text-[#9090a0] space-y-1">
-            <div>Sample FPS: {metrics.sampleFps?.toFixed(1) ?? "—"}</div>
-            <div>BLE FPS: {metrics.outputFps?.toFixed(1) ?? "—"}</div>
-            <div>Processing: {metrics.processingMs?.toFixed(1) ?? "—"} ms</div>
-            <div>Skipped sends: {metrics.skippedSends ?? 0}</div>
-            <div className="pt-1 border-t border-[#2e2e38] mt-1 space-y-1">
-              <div>Computed brightness: {metrics.computedBrightness ?? "—"}</div>
-              <div>Target brightness: {metrics.targetBrightness ?? "—"}</div>
-              <div>Smoothed brightness: {metrics.smoothedBrightness ?? "—"}</div>
-              <div>Edge intensity: {metrics.edgeIntensity?.toFixed(3) ?? "—"}</div>
-              <div>Center intensity: {metrics.centerIntensity?.toFixed(3) ?? "—"}</div>
-              <div>Spatial intensity: {metrics.spatialIntensity?.toFixed(3) ?? "—"}</div>
-              <div>Highlight intensity: {metrics.highlightIntensity?.toFixed(3) ?? "—"}</div>
-              <div>Screen intensity: {metrics.screenIntensity?.toFixed(3) ?? "—"}</div>
-              <div>Mode: {metrics.brightnessMode ?? "—"}</div>
-              <div>Black threshold: {metrics.blackThreshold?.toFixed(3) ?? "—"}</div>
-              <div>Center contribution: {metrics.centerContribution?.toFixed(3) ?? "—"}</div>
-              <div>Highlight influence: {metrics.highlightInfluence?.toFixed(3) ?? "—"}</div>
-            </div>
+        {localSettings.debug && debugMetrics && (
+          <div className="rounded-lg border border-[#2e2e38] bg-[#111114] p-2 text-[10px] font-mono text-[#9090a0] space-y-2">
+            <MetricSection title="Capture">
+              <div>Capture FPS: {debugMetrics.captureFps.toFixed(1)}</div>
+              {debugMetrics.targetCaptureFps != null && (
+                <div>Target capture FPS: {debugMetrics.targetCaptureFps.toFixed(1)}</div>
+              )}
+              <div>
+                Capture time: {debugMetrics.captureTimeMsAvg.toFixed(1)} ms avg /{" "}
+                {debugMetrics.captureTimeMsLast.toFixed(1)} ms last
+              </div>
+              <div>Capture failures: {debugMetrics.captureFailures}</div>
+            </MetricSection>
+
+            <MetricSection title="Processing">
+              <div>
+                Processing: {debugMetrics.processingTimeMsAvg.toFixed(1)} ms avg /{" "}
+                {debugMetrics.processingTimeMsLast.toFixed(1)} ms last
+              </div>
+              {debugMetrics.downsampleTimeMsAvg != null && (
+                <div>Downsample: {debugMetrics.downsampleTimeMsAvg.toFixed(1)} ms avg</div>
+              )}
+              {debugMetrics.algorithmTimeMsAvg != null && (
+                <div>Algorithm: {debugMetrics.algorithmTimeMsAvg.toFixed(1)} ms avg</div>
+              )}
+            </MetricSection>
+
+            <MetricSection title="Output">
+              <div>Target output FPS: {debugMetrics.targetOutputFps}</div>
+              <div>Actual output FPS: {debugMetrics.actualOutputFps.toFixed(1)}</div>
+              <div>
+                Output interval avg: {debugMetrics.outputIntervalMsAvg.toFixed(1)} ms
+              </div>
+              <div>
+                Since last BLE send: {debugMetrics.timeSinceLastBleSendMs.toFixed(0)} ms
+              </div>
+            </MetricSection>
+
+            <MetricSection title="Bluetooth">
+              <div>
+                BLE write: {debugMetrics.bleWriteTimeMsAvg.toFixed(1)} ms avg /{" "}
+                {debugMetrics.bleWriteTimeMsLast.toFixed(1)} ms last
+              </div>
+              <div>BLE failures: {debugMetrics.bleWriteFailures}</div>
+              {debugMetrics.bleWritesInFlight != null && (
+                <div>In-flight writes: {debugMetrics.bleWritesInFlight}</div>
+              )}
+              {debugMetrics.bleBusySkips != null && (
+                <div>Busy skips: {debugMetrics.bleBusySkips}</div>
+              )}
+            </MetricSection>
+
+            <MetricSection title="Skips">
+              <div>Delta skips: {debugMetrics.skippedDueToDelta}</div>
+              <div>Rate limit skips: {debugMetrics.skippedDueToRateLimit}</div>
+              <div>Duplicate skips: {debugMetrics.skippedDueToDuplicate}</div>
+              <div>Stale connection skips: {debugMetrics.skippedDueToStaleConnection}</div>
+              {debugMetrics.droppedFrames != null && (
+                <div>Dropped frames: {debugMetrics.droppedFrames}</div>
+              )}
+            </MetricSection>
+
+            <MetricSection title="Current Output">
+              <div>
+                RGB {currentR}, {currentG}, {currentB} · {hex}
+              </div>
+              <div>Brightness: {debugMetrics.computedBrightness}/64</div>
+              <div>Screen intensity: {debugMetrics.screenIntensity.toFixed(3)}</div>
+              <div>Color delta: {debugMetrics.colorDeltaLast}</div>
+              <div>Brightness delta: {debugMetrics.brightnessDeltaLast}</div>
+            </MetricSection>
+
+            <button
+              type="button"
+              onClick={() => setDetailedMetricsOpen((o) => !o)}
+              className="flex w-full items-center justify-between text-[9px] uppercase tracking-wider text-[#555568] hover:text-[#9090a0] pt-1 border-t border-[#2e2e38]"
+            >
+              <span>Detailed Metrics</span>
+              <ChevronDown
+                size={12}
+                className={`transition-transform ${detailedMetricsOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+
+            {detailedMetricsOpen && (
+              <div className="space-y-0.5 pt-1">
+                <div>Target brightness: {debugMetrics.targetBrightness ?? "—"}</div>
+                <div>Smoothed brightness: {debugMetrics.smoothedBrightness ?? "—"}</div>
+                <div>Edge intensity: {debugMetrics.edgeIntensity?.toFixed(3) ?? "—"}</div>
+                <div>Center intensity: {debugMetrics.centerIntensity?.toFixed(3) ?? "—"}</div>
+                <div>Spatial intensity: {debugMetrics.spatialIntensity?.toFixed(3) ?? "—"}</div>
+                <div>
+                  Highlight intensity: {debugMetrics.highlightIntensity?.toFixed(3) ?? "—"}
+                </div>
+                <div>Mode: {debugMetrics.brightnessMode ?? "—"}</div>
+                <div>Black threshold: {debugMetrics.blackThreshold?.toFixed(3) ?? "—"}</div>
+                <div>
+                  Center contribution: {debugMetrics.centerContribution?.toFixed(3) ?? "—"}
+                </div>
+                <div>
+                  Highlight influence: {debugMetrics.highlightInfluence?.toFixed(3) ?? "—"}
+                </div>
+                <div>
+                  Since last frame: {debugMetrics.timeSinceLastFrameMs.toFixed(0)} ms
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void handleCopyDebugSnapshot()}
+              className="w-full rounded-md border border-[#2e2e38] px-2 py-1 text-[10px] text-[#9090a0] hover:text-[#f0f0f4] hover:border-[#555568] transition-colors"
+            >
+              Copy Debug Snapshot
+            </button>
           </div>
         )}
       </div>

@@ -1,8 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
 import type {
-  AmbientBrightnessMode,
-  AmbientBrightnessResponse,
-  AmbientOutputFps,
   AmbientSettings,
   AppState,
   ExportBundle,
@@ -175,86 +172,7 @@ function parseLoopSection(raw: unknown): LoopSection | null {
 
 function parseAmbientSettings(raw: unknown): AmbientSettings {
   if (!isRecord(raw)) return DEFAULT_AMBIENT_SETTINGS;
-
-  const clamp01 = (v: unknown, fallback: number) =>
-    typeof v === "number" && Number.isFinite(v)
-      ? Math.min(Math.max(v, 0), 1)
-      : fallback;
-
-  const clampRange = (v: unknown, min: number, max: number, fallback: number) =>
-    typeof v === "number" && Number.isFinite(v)
-      ? Math.min(Math.max(v, min), max)
-      : fallback;
-
-  const outputFps: AmbientOutputFps =
-    raw.outputFps === 4 ||
-    raw.outputFps === 8 ||
-    raw.outputFps === 10 ||
-    raw.outputFps === 12 ||
-    raw.outputFps === 15
-      ? raw.outputFps
-      : 8;
-
-  const brightnessMode: AmbientBrightnessMode =
-    raw.brightnessMode === "manual" ? "manual" : "dynamic";
-
-  const brightnessResponse: AmbientBrightnessResponse =
-    raw.brightnessResponse === "balanced" || raw.brightnessResponse === "brighter"
-      ? raw.brightnessResponse
-      : "dimmer";
-
-  return mergeAmbientSettings({
-    quality:
-      raw.quality === "performance" || raw.quality === "responsive_detail"
-        ? raw.quality
-        : "balanced",
-    outputFps,
-    edgePriority:
-      raw.edgePriority === "low" || raw.edgePriority === "medium"
-        ? raw.edgePriority
-        : "high",
-    saturationBoost: clampRange(raw.saturationBoost, 0.5, 3, DEFAULT_AMBIENT_SETTINGS.saturationBoost),
-    brightnessBoost: clampRange(raw.brightnessBoost, 0.5, 2, DEFAULT_AMBIENT_SETTINGS.brightnessBoost),
-    responsiveness: clamp01(raw.responsiveness, DEFAULT_AMBIENT_SETTINGS.responsiveness),
-    minColorDelta:
-      typeof raw.minColorDelta === "number" && Number.isFinite(raw.minColorDelta)
-        ? Math.min(Math.max(Math.round(raw.minColorDelta), 1), 64)
-        : DEFAULT_AMBIENT_SETTINGS.minColorDelta,
-    debug: typeof raw.debug === "boolean" ? raw.debug : false,
-    brightnessMode,
-    brightnessResponse,
-    brightnessResponseFineTune: clamp01(
-      raw.brightnessResponseFineTune,
-      DEFAULT_AMBIENT_SETTINGS.brightnessResponseFineTune
-    ),
-    blackThreshold: clampRange(raw.blackThreshold, 0.01, 0.2, DEFAULT_AMBIENT_SETTINGS.blackThreshold),
-    minActiveBrightness:
-      typeof raw.minActiveBrightness === "number" && Number.isFinite(raw.minActiveBrightness)
-        ? Math.min(Math.max(Math.round(raw.minActiveBrightness), 0), 20)
-        : DEFAULT_AMBIENT_SETTINGS.minActiveBrightness,
-    maxBrightness:
-      typeof raw.maxBrightness === "number" && Number.isFinite(raw.maxBrightness)
-        ? Math.min(Math.max(Math.round(raw.maxBrightness), 1), 64)
-        : DEFAULT_AMBIENT_SETTINGS.maxBrightness,
-    brightnessSmoothing: clampRange(
-      raw.brightnessSmoothing,
-      0.05,
-      0.6,
-      DEFAULT_AMBIENT_SETTINGS.brightnessSmoothing
-    ),
-    centerContribution: clampRange(
-      raw.centerContribution,
-      0,
-      0.35,
-      DEFAULT_AMBIENT_SETTINGS.centerContribution
-    ),
-    highlightInfluence: clampRange(
-      raw.highlightInfluence,
-      0,
-      0.6,
-      DEFAULT_AMBIENT_SETTINGS.highlightInfluence
-    ),
-  });
+  return mergeAmbientSettings(raw as Partial<AmbientSettings>);
 }
 
 function parseSettings(raw: unknown): AppState["settings"] | null {

@@ -1,9 +1,10 @@
-import type { AmbientFrameEvent, AmbientSettings, AmbientStatus } from "./types";
+import type { AmbientDebugMetrics, AmbientFrameEvent, AmbientSettings, AmbientStatus } from "./types";
 import {
   ambientGetStatus,
   ambientStart,
   ambientStop,
   ambientUpdateSettings,
+  listenAmbientDebugMetrics,
   listenAmbientFrame,
   listenAmbientNotice,
   listenAmbientStatus,
@@ -23,6 +24,7 @@ interface AmbientRunnerCallbacks {
   onColorChange: (color: { r: number; g: number; b: number }) => void;
   onStatusChange: (status: AmbientStatus) => void;
   onFrameMetrics?: (frame: AmbientFrameEvent) => void;
+  onDebugMetrics?: (metrics: AmbientDebugMetrics) => void;
   onStopped?: (reason: AmbientStopReason, message?: string) => void;
   onNotice?: (message: string) => void;
   getConnected: () => boolean;
@@ -55,6 +57,10 @@ async function setupListeners(): Promise<void> {
       if (!running || stopping) return;
       callbacks?.onColorChange({ r: frame.r, g: frame.g, b: frame.b });
       callbacks?.onFrameMetrics?.(frame);
+    }),
+    listenAmbientDebugMetrics((metrics) => {
+      if (!running || stopping) return;
+      callbacks?.onDebugMetrics?.(metrics);
     }),
     listenAmbientStatus((status) => {
       if (stopping || (!running && isActiveAmbientStatus(status))) return;

@@ -79,7 +79,7 @@ impl ColorProcessor {
         self.brightness_smoother.reset();
     }
 
-    pub fn process_frame(
+    pub fn process_frame_timed(
         &mut self,
         pixels: &[u8],
         width: u32,
@@ -87,7 +87,10 @@ impl ColorProcessor {
         bytes_per_row: usize,
         settings: &AmbientSettings,
         manual_brightness: u8,
-    ) -> ProcessedFrame {
+    ) -> (ProcessedFrame, f32) {
+        use std::time::Instant;
+
+        let algo_start = Instant::now();
         let samples = collect_samples(pixels, width, height, bytes_per_row, settings);
         let intensity = compute_intensity_metrics(&samples, settings);
         let target_brightness = map_intensity_to_brightness(intensity.screen_intensity, settings);
@@ -121,12 +124,57 @@ impl ColorProcessor {
             smoothed_brightness: computed_brightness,
         };
 
-        ProcessedFrame {
-            rgb: smoothed_rgb,
-            brightness,
-            target_brightness,
-            screen_intensity: intensity.screen_intensity,
-            metrics,
+        let algorithm_ms = algo_start.elapsed().as_secs_f32() * 1000.0;
+
+        (
+            ProcessedFrame {
+                rgb: smoothed_rgb,
+                brightness,
+                target_brightness,
+                screen_intensity: intensity.screen_intensity,
+                metrics,
+            },
+            algorithm_ms,
+        )
+    }
+
+    pub fn compute_deltas(&self, frame: &ProcessedFrame) -> (u32, u32) {
+        let (r, g, b) = (
+            frame.rgb.r.round() as i32,
+            frame.rgb.g.round() as i32,
+            frame.rgb.b.round() as i32,
+        );
+        let brightness = frame.brightness;
+
+        match self.previous_sent {
+            Some(prev) => {
+                let rgb_delta = (prev.r.round() as i32 - r).abs()
+                    + (prev.g.round() as i32 - g).abs()
+                    + (prev.b.round() as i32 - b).abs();
+                let brightness_delta = self
+                    .previous_sent_brightness
+                    .map(|pb| (pb as i32 - brightness as i32).abs())
+                    .unwrap_or(255) as u32;
+                (rgb_delta as u32, brightness_delta)
+            }
+            None => (255, 255),
+        }
+    }
+
+    pub fn is_duplicate(&self, frame: &ProcessedFrame) -> bool {
+        let (r, g, b) = (
+            frame.rgb.r.round() as u8,
+            frame.rgb.g.round() as u8,
+            frame.rgb.b.round() as u8,
+        );
+        match self.previous_sent {
+            Some(prev) => {
+                prev.r.round() as u8 == r
+                    && prev.g.round() as u8 == g
+                    && prev.b.round() as u8 == b
+                    && self.previous_sent_brightness == Some(frame.brightness)
+            }
+            None => false,
         }
     }
 

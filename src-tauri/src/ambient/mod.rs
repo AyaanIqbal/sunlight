@@ -2,6 +2,7 @@ mod brightness;
 mod capture;
 mod color;
 mod engine;
+mod metrics;
 mod permission;
 mod types;
 

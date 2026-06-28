@@ -3,6 +3,8 @@ pub struct FrameData {
     pub width: u32,
     pub height: u32,
     pub bytes_per_row: usize,
+    pub capture_ms: f32,
+    pub downsample_ms: f32,
 }
 
 pub struct CaptureSession {
@@ -14,17 +16,26 @@ pub struct CaptureSession {
 
 #[cfg(target_os = "macos")]
 fn capture_frame_blocking(monitor_id: u32, width: u32, height: u32) -> Option<FrameData> {
+    use std::time::Instant;
+
+    let capture_start = Instant::now();
     let monitors = xcap::Monitor::all().ok()?;
     let monitor = monitors
         .into_iter()
         .find(|m| m.id().ok() == Some(monitor_id))?;
     let image = monitor.capture_image().ok()?;
+    let grab_ms = capture_start.elapsed().as_secs_f32() * 1000.0;
+
+    let resize_start = Instant::now();
     let resized = image::imageops::resize(
         &image,
         width,
         height,
         image::imageops::FilterType::Triangle,
     );
+    let downsample_ms = resize_start.elapsed().as_secs_f32() * 1000.0;
+    let capture_ms = grab_ms + downsample_ms;
+
     let width = resized.width();
     let height = resized.height();
     let bytes_per_row = (width as usize) * 4;
@@ -40,6 +51,8 @@ fn capture_frame_blocking(monitor_id: u32, width: u32, height: u32) -> Option<Fr
         width,
         height,
         bytes_per_row,
+        capture_ms,
+        downsample_ms,
     })
 }
 

@@ -4,7 +4,7 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { Settings } from "lucide-react";
 import type {
-  AmbientFrameEvent,
+  AmbientDebugMetrics,
   AmbientSettings,
   AmbientStatus,
   AppState,
@@ -85,7 +85,8 @@ export default function App() {
   const [runningLoopName, setRunningLoopName] = useState<string | null>(null);
   const [ambientSettings, setAmbientSettings] = useState<AmbientSettings>(DEFAULT_AMBIENT_SETTINGS);
   const [ambientStatus, setAmbientStatus] = useState<AmbientStatus>("inactive");
-  const [ambientMetrics, setAmbientMetrics] = useState<AmbientFrameEvent | null>(null);
+  const [ambientDebugMetrics, setAmbientDebugMetrics] =
+    useState<AmbientDebugMetrics | null>(null);
   const [ambientBrightness, setAmbientBrightness] = useState<number | null>(null);
   const [saveCurrentModal, setSaveCurrentModal] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -177,10 +178,12 @@ export default function App() {
       },
       onStatusChange: setAmbientStatus,
       onFrameMetrics: (frame) => {
-        setAmbientMetrics(frame);
         if (frame.computedBrightness != null) {
           setAmbientBrightness(frame.computedBrightness);
         }
+      },
+      onDebugMetrics: (metrics) => {
+        setAmbientDebugMetrics(metrics);
       },
       capturePreAmbientState: () => ({
         r: colorRef.current.r,
@@ -200,6 +203,7 @@ export default function App() {
       },
       onStopped: (reason, message) => {
         setAmbientBrightness(null);
+        setAmbientDebugMetrics(null);
         if (reason === "connection_lost") {
           showToast(
             message ??
@@ -281,7 +285,7 @@ export default function App() {
         setTransitionEnabled(state.settings.transitionEnabled ?? true);
         setTransitionDurationMs(state.settings.transitionDurationMs ?? 1200);
         setAmbientSettings(state.settings.ambient ?? DEFAULT_AMBIENT_SETTINGS);
-        setWorkspace(state.settings.activeWorkspace ?? "presets");
+        setWorkspace("presets");
         setPresets(state.presets);
         setSections(state.sections);
         setLoops(state.loops);
@@ -299,7 +303,7 @@ export default function App() {
         }
       } else {
         const fresh = createFreshAppState();
-        setWorkspace(fresh.settings.activeWorkspace ?? "presets");
+        setWorkspace("presets");
         setAmbientSettings(fresh.settings.ambient ?? DEFAULT_AMBIENT_SETTINGS);
         setPresets(fresh.presets);
         setSections(fresh.sections);
@@ -322,7 +326,6 @@ export default function App() {
           liveUpdate,
           transitionEnabled,
           transitionDurationMs,
-          activeWorkspace: workspace,
           ambient: ambientSettings,
           lastColor: { r, g, b, brightness },
         },
@@ -339,7 +342,6 @@ export default function App() {
     liveUpdate,
     transitionEnabled,
     transitionDurationMs,
-    workspace,
     ambientSettings,
     r,
     g,
@@ -483,6 +485,7 @@ export default function App() {
 
   const handleStopAmbient = async () => {
     await stopAmbient("user");
+    setAmbientDebugMetrics(null);
     showToast("Ambient Mode stopped.");
   };
 
@@ -526,7 +529,6 @@ export default function App() {
           liveUpdate,
           transitionEnabled,
           transitionDurationMs,
-          activeWorkspace: workspace,
           ambient: ambientSettings,
           lastColor: { r, g, b, brightness },
         },
@@ -694,7 +696,7 @@ export default function App() {
             ambientStatus={ambientStatus}
             ambientSettings={ambientSettings}
             onAmbientSettingsChange={handleAmbientSettingsChange}
-            ambientMetrics={ambientMetrics}
+            ambientDebugMetrics={ambientDebugMetrics}
             ambientBrightness={ambientBrightness}
             manualBrightness={brightness}
             onStartAmbient={() => void handleStartAmbient()}

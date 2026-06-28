@@ -77,9 +77,25 @@ impl AmbientSettings {
             10 => 10,
             12 => 12,
             15 => 15,
+            20 => 20,
+            25 => 25,
+            30 => 30,
             _ => 8,
         };
         1000 / fps as u64
+    }
+
+    pub fn target_sample_interval_ms(&self) -> u64 {
+        match self.output_fps {
+            20 => 40,
+            25 => 33,
+            30 => 30,
+            _ => 55,
+        }
+    }
+
+    pub fn target_capture_fps(&self) -> f32 {
+        1000.0 / self.target_sample_interval_ms() as f32
     }
 
     pub fn is_dynamic_brightness(&self) -> bool {
@@ -109,9 +125,46 @@ pub struct AmbientFrameEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub computed_brightness: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_brightness: Option<u8>,
+    pub screen_intensity: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmbientDebugMetrics {
+    pub capture_fps: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub smoothed_brightness: Option<u8>,
+    pub target_capture_fps: Option<f32>,
+    pub capture_time_ms_avg: f32,
+    pub capture_time_ms_last: f32,
+    pub capture_failures: u32,
+    pub processing_time_ms_avg: f32,
+    pub processing_time_ms_last: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downsample_time_ms_avg: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub algorithm_time_ms_avg: Option<f32>,
+    pub target_output_fps: f32,
+    pub actual_output_fps: f32,
+    pub output_interval_ms_avg: f32,
+    pub time_since_last_frame_ms: f32,
+    pub time_since_last_ble_send_ms: f32,
+    pub ble_write_time_ms_avg: f32,
+    pub ble_write_time_ms_last: f32,
+    pub ble_write_failures: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ble_writes_in_flight: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ble_busy_skips: Option<u32>,
+    pub skipped_due_to_delta: u32,
+    pub skipped_due_to_rate_limit: u32,
+    pub skipped_due_to_duplicate: u32,
+    pub skipped_due_to_stale_connection: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dropped_frames: Option<u32>,
+    pub color_delta_last: u32,
+    pub brightness_delta_last: u32,
+    pub computed_brightness: u8,
+    pub screen_intensity: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edge_intensity: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,7 +174,9 @@ pub struct AmbientFrameEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub highlight_intensity: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub screen_intensity: Option<f32>,
+    pub smoothed_brightness: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_brightness: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub brightness_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,14 +185,6 @@ pub struct AmbientFrameEvent {
     pub center_contribution: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub highlight_influence: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sample_fps: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_fps: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub processing_ms: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skipped_sends: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

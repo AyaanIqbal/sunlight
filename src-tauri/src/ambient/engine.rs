@@ -1,12 +1,13 @@
 use super::capture::CaptureSession;
-use super::color::{downgrade_quality, ColorProcessor};
+use super::color::{downgrade_quality, ColorProcessor, ProcessedFrame};
+use super::metrics::AmbientMetricsCollector;
 use super::permission::{
     check_screen_capture_permission, request_screen_capture_permission,
     screen_capture_denied_message,
 };
 use super::types::{
-    rgb_to_hex, AmbientFrameEvent, AmbientSettings, AmbientStatus, AmbientStopReason,
-    AmbientStoppedEvent, ScreenCapturePermission,
+    rgb_to_hex, AmbientDebugMetrics, AmbientFrameEvent, AmbientSettings, AmbientStatus,
+    AmbientStopReason, AmbientStoppedEvent, ScreenCapturePermission,
 };
 use crate::errors::LampError;
 use crate::reconnect::write_color_if_connected;
@@ -22,6 +23,39 @@ use tokio::task::JoinHandle;
 struct RuntimeConfig {
     settings: AmbientSettings,
     brightness: u8,
+}
+
+#[derive(Clone, Copy)]
+struct PendingSend {
+    r: u8,
+    g: u8,
+    b: u8,
+    brightness: u8,
+    frame: ProcessedFrame,
+}
+
+type BleWriteHandle = JoinHandle<(Result<(), LampError>, f32, ProcessedFrame)>;
+
+struct AmbientBleOutput {
+    in_flight: Option<BleWriteHandle>,
+    pending: Option<PendingSend>,
+    last_ble_send: Instant,
+}
+
+impl AmbientBleOutput {
+    fn new() -> Self {
+        Self {
+            in_flight: None,
+            pending: None,
+            last_ble_send: Instant::now() - Duration::from_secs(1),
+        }
+    }
+
+    fn is_busy(&self) -> bool {
+        self.in_flight
+            .as_ref()
+            .is_some_and(|h| !h.is_finished())
+    }
 }
 
 pub struct AmbientEngine {
@@ -192,20 +226,28 @@ async fn run_ambient_loop(
     let _ = app.emit("ambient://status", serde_json::json!({ "status": "running" }));
 
     let mut processor = ColorProcessor::default();
-    let mut last_ble_send = Instant::now() - Duration::from_secs(1);
-    let mut skipped_sends: u32 = 0;
-    let mut sample_times: Vec<Instant> = Vec::with_capacity(30);
-    let mut ble_times: Vec<Instant> = Vec::with_capacity(10);
+    let mut ble_output = AmbientBleOutput::new();
+    let mut metrics = AmbientMetricsCollector::default();
     let mut processing_samples: Vec<f32> = Vec::with_capacity(30);
     let mut quality_downgraded = false;
     let mut needs_capture_restart = false;
     let mut current_dims = (width, height);
+    let mut last_debug_emit = Instant::now() - Duration::from_secs(1);
+    let mut last_output_fps = 0u8;
 
     loop {
         if *stop_rx.borrow() {
             break;
         }
 
+        if !poll_ble_write(&mut ble_output, &mut processor, &mut metrics, &lamp_state, &app).await
+        {
+            break;
+        }
+
+        metrics.set_ble_writes_in_flight(if ble_output.is_busy() { 1 } else { 0 });
+
+        let capture_start = Instant::now();
         let frame = tokio::select! {
             biased;
             _ = stop_rx.changed() => {
@@ -221,6 +263,7 @@ async fn run_ambient_loop(
         };
 
         let Some(frame) = frame else {
+            metrics.record_capture_failure();
             if let Some(err) = capture_error_hint() {
                 let _ = app.emit(
                     "ambient://stopped",
@@ -234,9 +277,15 @@ async fn run_ambient_loop(
             continue;
         };
 
-        let frame_start = Instant::now();
+        metrics.record_capture(frame.capture_ms, frame.downsample_ms);
+
         let runtime = config.read().await.clone();
         let settings = &runtime.settings;
+
+        if settings.output_fps != last_output_fps {
+            metrics.reset_sustain_notice();
+            last_output_fps = settings.output_fps;
+        }
 
         if needs_capture_restart {
             let (w, h) = settings.dimensions();
@@ -250,17 +299,8 @@ async fn run_ambient_loop(
             continue;
         }
 
-        // Target ~18 FPS sample rate for polling capture backends.
-        let sample_interval = Duration::from_millis(55);
-        let elapsed_since_start = frame_start.elapsed();
-        if elapsed_since_start < sample_interval {
-            tokio::time::sleep(sample_interval - elapsed_since_start).await;
-            if *stop_rx.borrow() {
-                break;
-            }
-        }
-
-        let processed = processor.process_frame(
+        let process_start = Instant::now();
+        let (processed, algorithm_ms) = processor.process_frame_timed(
             &frame.pixels,
             frame.width,
             frame.height,
@@ -268,8 +308,13 @@ async fn run_ambient_loop(
             settings,
             runtime.brightness,
         );
+        let processing_ms = process_start.elapsed().as_secs_f32() * 1000.0;
+        metrics.record_processing(processing_ms, algorithm_ms);
 
-        let processing_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
+        let (color_delta, brightness_delta) = processor.compute_deltas(&processed);
+        metrics.set_output_deltas(color_delta, brightness_delta);
+        metrics.set_output_state(processed.brightness, processed.screen_intensity);
+
         processing_samples.push(processing_ms);
         if processing_samples.len() > 30 {
             processing_samples.remove(0);
@@ -294,110 +339,171 @@ async fn run_ambient_loop(
             }
         }
 
-        sample_times.push(Instant::now());
-        if sample_times.len() > 30 {
-            sample_times.remove(0);
-        }
-
-        let sample_fps = compute_fps(&sample_times);
         let output_interval = Duration::from_millis(settings.output_interval_ms());
-
-        if last_ble_send.elapsed() >= output_interval
-            && processor.should_send(&processed, settings)
-        {
-            let r = processed.rgb.r.clamp(0.0, 255.0) as u8;
-            let g = processed.rgb.g.clamp(0.0, 255.0) as u8;
-            let b = processed.rgb.b.clamp(0.0, 255.0) as u8;
-            let brightness = processed.brightness;
-
-            match write_color_if_connected(&lamp_state, r, g, b, brightness).await {
-                Ok(()) => {
-                    processor.mark_sent(&processed);
-                    last_ble_send = Instant::now();
-                    ble_times.push(Instant::now());
-                    if ble_times.len() > 10 {
-                        ble_times.remove(0);
-                    }
-                }
-                Err(LampError::ConnectionStale | LampError::NotConnected | LampError::WriteFailure) => {
-                    let _ = app.emit(
-                        "ambient://stopped",
-                        AmbientStoppedEvent {
-                            reason: AmbientStopReason::ConnectionLost,
-                            message: Some(
-                                "Ambient Mode stopped because the lamp connection became stale."
-                                    .to_string(),
-                            ),
-                        },
-                    );
-                    break;
-                }
-                Err(_) => {
-                    let _ = app.emit(
-                        "ambient://stopped",
-                        AmbientStoppedEvent {
-                            reason: AmbientStopReason::ConnectionLost,
-                            message: Some(
-                                "Ambient Mode stopped because the lamp connection became stale."
-                                    .to_string(),
-                            ),
-                        },
-                    );
-                    break;
-                }
-            }
-        } else if last_ble_send.elapsed() >= output_interval {
-            skipped_sends += 1;
-        }
-
-        let output_fps = compute_fps(&ble_times);
         let r = processed.rgb.r.clamp(0.0, 255.0) as u8;
         let g = processed.rgb.g.clamp(0.0, 255.0) as u8;
         let b = processed.rgb.b.clamp(0.0, 255.0) as u8;
+        let brightness = processed.brightness;
+        let send = PendingSend {
+            r,
+            g,
+            b,
+            brightness,
+            frame: processed,
+        };
 
-        let event = AmbientFrameEvent {
+        if ble_output.last_ble_send.elapsed() >= output_interval {
+            if processor.is_duplicate(&processed) {
+                metrics.record_skip_duplicate();
+            } else if processor.should_send(&processed, settings) {
+                if ble_output.is_busy() {
+                    metrics.record_ble_busy_skip();
+                    if ble_output.pending.is_some() {
+                        metrics.record_dropped_frame();
+                    }
+                    ble_output.pending = Some(send);
+                } else {
+                    ble_output.last_ble_send = Instant::now();
+                    spawn_ble_write(&mut ble_output, &lamp_state, send);
+                }
+            } else {
+                metrics.record_skip_delta();
+            }
+        } else {
+            metrics.record_skip_rate_limit();
+        }
+
+        let frame_event = AmbientFrameEvent {
             r,
             g,
             b,
             hex: rgb_to_hex(r, g, b),
             computed_brightness: Some(processed.brightness),
-            target_brightness: Some(processed.target_brightness),
-            smoothed_brightness: Some(processed.metrics.smoothed_brightness),
-            edge_intensity: Some(processed.metrics.edge_intensity),
-            center_intensity: Some(processed.metrics.center_intensity),
-            spatial_intensity: Some(processed.metrics.spatial_intensity),
-            highlight_intensity: Some(processed.metrics.highlight_intensity),
             screen_intensity: Some(processed.screen_intensity),
-            brightness_mode: Some(settings.brightness_mode.clone()),
-            black_threshold: Some(settings.black_threshold),
-            center_contribution: Some(settings.center_contribution),
-            highlight_influence: Some(settings.highlight_influence),
-            sample_fps: Some(sample_fps),
-            output_fps: Some(output_fps),
-            processing_ms: Some(processing_ms),
-            skipped_sends: if settings.debug {
-                Some(skipped_sends)
-            } else {
-                None
-            },
         };
+        let _ = app.emit("ambient://frame", frame_event);
 
-        let _ = app.emit("ambient://frame", event);
+        if settings.debug && last_debug_emit.elapsed() >= Duration::from_millis(500) {
+            last_debug_emit = Instant::now();
+            let debug_metrics = metrics.snapshot_with_pipeline(
+                settings,
+                processed.metrics.edge_intensity,
+                processed.metrics.center_intensity,
+                processed.metrics.spatial_intensity,
+                processed.metrics.highlight_intensity,
+                processed.metrics.smoothed_brightness,
+                processed.target_brightness,
+            );
+            emit_debug_metrics(&app, &debug_metrics, settings, &mut metrics);
+        }
+
+        let sample_interval = Duration::from_millis(settings.target_sample_interval_ms());
+        let elapsed_since_capture = capture_start.elapsed();
+        if elapsed_since_capture < sample_interval {
+            tokio::time::sleep(sample_interval - elapsed_since_capture).await;
+            if *stop_rx.borrow() {
+                break;
+            }
+        }
+    }
+
+    if let Some(handle) = ble_output.in_flight.take() {
+        let _ = handle.await;
     }
 
     capture.stop().await;
     let _ = app.emit("ambient://status", serde_json::json!({ "status": "stopped" }));
 }
 
-fn compute_fps(times: &[Instant]) -> f32 {
-    if times.len() < 2 {
-        return 0.0;
+fn spawn_ble_write(
+    ble_output: &mut AmbientBleOutput,
+    lamp_state: &SharedLampState,
+    send: PendingSend,
+) {
+    let state = lamp_state.clone();
+    let write_start = Instant::now();
+    ble_output.in_flight = Some(tokio::spawn(async move {
+        let result =
+            write_color_if_connected(&state, send.r, send.g, send.b, send.brightness).await;
+        let duration_ms = write_start.elapsed().as_secs_f32() * 1000.0;
+        (result, duration_ms, send.frame)
+    }));
+}
+
+async fn poll_ble_write(
+    ble_output: &mut AmbientBleOutput,
+    processor: &mut ColorProcessor,
+    metrics: &mut AmbientMetricsCollector,
+    lamp_state: &SharedLampState,
+    app: &AppHandle,
+) -> bool {
+    let Some(handle) = ble_output.in_flight.take() else {
+        if !ble_output.is_busy() {
+            if let Some(pending) = ble_output.pending.take() {
+                ble_output.last_ble_send = Instant::now();
+                spawn_ble_write(ble_output, lamp_state, pending);
+            }
+        }
+        return true;
+    };
+
+    if !handle.is_finished() {
+        ble_output.in_flight = Some(handle);
+        return true;
     }
-    let duration = times.last().unwrap().duration_since(times[0]);
-    if duration.is_zero() {
-        return 0.0;
+
+    match handle.await {
+        Ok((Ok(()), duration_ms, frame)) => {
+            metrics.record_ble_write(duration_ms);
+            processor.mark_sent(&frame);
+            if let Some(pending) = ble_output.pending.take() {
+                ble_output.last_ble_send = Instant::now();
+                spawn_ble_write(ble_output, lamp_state, pending);
+            }
+        }
+        Ok((Err(LampError::ConnectionStale | LampError::NotConnected | LampError::WriteFailure), _, _))
+        | Ok((Err(_), _, _))
+        | Err(_) => {
+            metrics.record_ble_failure();
+            metrics.record_skip_stale();
+            emit_connection_lost(app);
+            return false;
+        }
     }
-    (times.len() - 1) as f32 / duration.as_secs_f32()
+
+    true
+}
+
+fn emit_debug_metrics(
+    app: &AppHandle,
+    debug_metrics: &AmbientDebugMetrics,
+    settings: &AmbientSettings,
+    metrics: &mut AmbientMetricsCollector,
+) {
+    if metrics.check_sustain_notice(settings.output_fps, debug_metrics.actual_output_fps) {
+        let _ = app.emit(
+            "ambient://notice",
+            serde_json::json!({
+                "message": format!(
+                    "Ambient Mode could not sustain {} FPS. Try 15 FPS or Balanced quality.",
+                    settings.output_fps
+                )
+            }),
+        );
+    }
+    let _ = app.emit("ambient://debug-metrics", debug_metrics.clone());
+}
+
+fn emit_connection_lost(app: &AppHandle) {
+    let _ = app.emit(
+        "ambient://stopped",
+        AmbientStoppedEvent {
+            reason: AmbientStopReason::ConnectionLost,
+            message: Some(
+                "Ambient Mode stopped because the lamp connection became stale.".to_string(),
+            ),
+        },
+    );
 }
 
 fn emit_status(app: &AppHandle, status: AmbientStatus) {

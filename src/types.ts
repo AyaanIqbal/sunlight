@@ -10,7 +10,7 @@ export type ConnectionStatus =
 export type WorkspaceTab = "presets" | "loops" | "ambient";
 
 export type AmbientQuality = "performance" | "balanced" | "responsive_detail";
-export type AmbientOutputFps = 4 | 8 | 10 | 12 | 15;
+export type AmbientOutputFps = 4 | 8 | 10 | 12 | 15 | 20 | 25 | 30;
 export type AmbientEdgePriority = "low" | "medium" | "high";
 export type AmbientBrightnessMode = "manual" | "dynamic";
 export type AmbientBrightnessResponse = "dimmer" | "balanced" | "brighter";
@@ -70,21 +70,48 @@ export interface AmbientFrameEvent {
   b: number;
   hex: string;
   computedBrightness?: number;
-  targetBrightness?: number;
-  smoothedBrightness?: number;
+  screenIntensity?: number;
+}
+
+export interface AmbientDebugMetrics {
+  captureFps: number;
+  targetCaptureFps?: number;
+  captureTimeMsAvg: number;
+  captureTimeMsLast: number;
+  captureFailures: number;
+  processingTimeMsAvg: number;
+  processingTimeMsLast: number;
+  downsampleTimeMsAvg?: number;
+  algorithmTimeMsAvg?: number;
+  targetOutputFps: number;
+  actualOutputFps: number;
+  outputIntervalMsAvg: number;
+  timeSinceLastFrameMs: number;
+  timeSinceLastBleSendMs: number;
+  bleWriteTimeMsAvg: number;
+  bleWriteTimeMsLast: number;
+  bleWriteFailures: number;
+  bleWritesInFlight?: number;
+  bleBusySkips?: number;
+  skippedDueToDelta: number;
+  skippedDueToRateLimit: number;
+  skippedDueToDuplicate: number;
+  skippedDueToStaleConnection: number;
+  droppedFrames?: number;
+  colorDeltaLast: number;
+  brightnessDeltaLast: number;
+  computedBrightness: number;
+  screenIntensity: number;
   edgeIntensity?: number;
   centerIntensity?: number;
   spatialIntensity?: number;
   highlightIntensity?: number;
-  screenIntensity?: number;
+  smoothedBrightness?: number;
+  targetBrightness?: number;
   brightnessMode?: AmbientBrightnessMode;
   blackThreshold?: number;
   centerContribution?: number;
   highlightInfluence?: number;
-  sampleFps?: number;
-  outputFps?: number;
-  processingMs?: number;
-  skippedSends?: number;
 }
 export type TransitionType = "smooth" | "instant";
 

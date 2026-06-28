@@ -20,7 +20,7 @@ export function migrateAppState(raw: Partial<AppState> | null): AppState | null 
       liveUpdate: raw.settings.liveUpdate ?? true,
       transitionEnabled: raw.settings.transitionEnabled ?? true,
       transitionDurationMs: raw.settings.transitionDurationMs ?? 1200,
-      activeWorkspace: raw.settings.activeWorkspace ?? "presets",
+      activeWorkspace: "presets",
       ambient: mergeAmbientSettings(raw.settings.ambient),
       lastColor: raw.settings.lastColor ?? { r: 255, g: 128, b: 0, brightness: 64 },
     },

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AmbientFrameEvent, AmbientSettings, AmbientStatus } from "./types";
+import type { AmbientDebugMetrics, AmbientFrameEvent, AmbientSettings, AmbientStatus } from "./types";
 
 export type ScreenCapturePermission = "granted" | "denied" | "unknown";
 
@@ -56,6 +56,14 @@ export async function listenAmbientFrame(
   handler: (event: AmbientFrameEvent) => void
 ): Promise<UnlistenFn> {
   return listen<AmbientFrameEvent>("ambient://frame", (e) => handler(e.payload));
+}
+
+export async function listenAmbientDebugMetrics(
+  handler: (metrics: AmbientDebugMetrics) => void
+): Promise<UnlistenFn> {
+  return listen<AmbientDebugMetrics>("ambient://debug-metrics", (e) =>
+    handler(e.payload)
+  );
 }
 
 export async function listenAmbientStatus(
