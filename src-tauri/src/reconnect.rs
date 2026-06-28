@@ -1,6 +1,8 @@
 use crate::errors::LampError;
-use crate::lamp::{connect_peripheral, disconnect_peripheral, scan_for_lamp};
+use crate::lamp::{connect_peripheral, disconnect_peripheral, scan_for_lamp, write_color};
 use crate::state::{ConnectMode, ConnectionStatus, SharedLampState};
+
+use btleplug::api::Peripheral as _;
 
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -177,4 +179,52 @@ pub async fn perform_connect(
     s.user_disconnected = false;
     s.last_reconnect_at = None;
     Ok(())
+}
+
+/// Write color to the lamp if connected; marks stale and spawns reconnect on failure.
+pub async fn write_color_if_connected(
+    state: &SharedLampState,
+    r: u8,
+    g: u8,
+    b: u8,
+    brightness: u8,
+) -> Result<(), LampError> {
+    if brightness > 64 {
+        return Err(LampError::InvalidValue(format!(
+            "brightness must be 0–64, got {brightness}"
+        )));
+    }
+
+    let write_result = {
+        let s = state.lock().await;
+        if s.status != ConnectionStatus::Connected {
+            if matches!(s.status, ConnectionStatus::Stale | ConnectionStatus::Reconnecting) {
+                return Err(LampError::ConnectionStale);
+            }
+            return Err(LampError::NotConnected);
+        }
+        let peripheral = match s.peripheral.as_ref() {
+            Some(p) => p,
+            None => return Err(LampError::NotConnected),
+        };
+        let char_uuid = s.characteristic_uuid;
+
+        if let Ok(false) = peripheral.is_connected().await {
+            drop(s);
+            mark_stale(state).await;
+            spawn_auto_reconnect(state.clone());
+            return Err(LampError::ConnectionStale);
+        }
+
+        write_color(peripheral, char_uuid, r, g, b, brightness).await
+    };
+
+    match write_result {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            mark_stale(state).await;
+            spawn_auto_reconnect(state.clone());
+            Err(e)
+        }
+    }
 }

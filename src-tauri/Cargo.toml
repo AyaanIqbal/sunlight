@@ -23,3 +23,8 @@ btleplug = "0.12"
 aes = "0.8"
 uuid = { version = "1", features = ["v4"] }
 thiserror = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+xcap = "0.9"
+core-graphics = "0.24"
+image = "0.25"

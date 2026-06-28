@@ -1,3 +1,4 @@
+mod ambient;
 mod errors;
 mod lamp;
 mod protocol;
@@ -5,15 +6,20 @@ mod reconnect;
 mod state;
 mod store;
 
+use crate::ambient::{
+    check_screen_capture_permission, request_screen_capture_permission, stop_ambient_engine,
+    AmbientEngine, AmbientSettings, AmbientStatus, AmbientStopReason, ScreenCapturePermission,
+    SharedAmbientEngine,
+};
 use crate::errors::LampError;
-use crate::lamp::{disconnect_peripheral, write_color};
-use crate::reconnect::{mark_stale, perform_connect, spawn_auto_reconnect};
+use crate::lamp::disconnect_peripheral;
+use crate::reconnect::{perform_connect, write_color_if_connected};
 use crate::state::{ConnectMode, ConnectionStatus, LampState, SharedLampState};
 use crate::store::AppState;
 
 use btleplug::api::Peripheral as _;
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, RunEvent, State};
 use tokio::sync::Mutex;
 
 async fn sync_status_with_peripheral(state: &SharedLampState) -> ConnectionStatus {
@@ -64,7 +70,19 @@ async fn connect_lamp(state: State<'_, SharedLampState>) -> Result<(), LampError
 }
 
 #[tauri::command]
-async fn disconnect_lamp(state: State<'_, SharedLampState>) -> Result<(), LampError> {
+async fn disconnect_lamp(
+    state: State<'_, SharedLampState>,
+    ambient: State<'_, SharedAmbientEngine>,
+    app: AppHandle,
+) -> Result<(), LampError> {
+    stop_ambient_engine(
+        ambient.inner(),
+        Some(&app),
+        AmbientStopReason::Disconnect,
+        None,
+    )
+    .await;
+
     let peripheral = {
         let mut s = state.lock().await;
         s.peripheral.take()
@@ -118,44 +136,7 @@ async fn set_color(
     brightness: u8,
     state: State<'_, SharedLampState>,
 ) -> Result<(), LampError> {
-    if brightness > 64 {
-        return Err(LampError::InvalidValue(format!(
-            "brightness must be 0–64, got {brightness}"
-        )));
-    }
-
-    let write_result = {
-        let s = state.lock().await;
-        if s.status != ConnectionStatus::Connected {
-            if matches!(s.status, ConnectionStatus::Stale | ConnectionStatus::Reconnecting) {
-                return Err(LampError::ConnectionStale);
-            }
-            return Err(LampError::NotConnected);
-        }
-        let peripheral = match s.peripheral.as_ref() {
-            Some(p) => p,
-            None => return Err(LampError::NotConnected),
-        };
-        let char_uuid = s.characteristic_uuid;
-
-        if let Ok(false) = peripheral.is_connected().await {
-            drop(s);
-            mark_stale(&state).await;
-            spawn_auto_reconnect(state.inner().clone());
-            return Err(LampError::ConnectionStale);
-        }
-
-        write_color(peripheral, char_uuid, r, g, b, brightness).await
-    };
-
-    match write_result {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            mark_stale(&state).await;
-            spawn_auto_reconnect(state.inner().clone());
-            Err(e)
-        }
-    }
+    write_color_if_connected(&state, r, g, b, brightness).await
 }
 
 #[tauri::command]
@@ -173,14 +154,72 @@ async fn save_state(app: AppHandle, state: AppState) -> Result<(), String> {
     store::save(&app, &state)
 }
 
+#[tauri::command]
+fn ambient_check_permission() -> ScreenCapturePermission {
+    check_screen_capture_permission()
+}
+
+#[tauri::command]
+fn ambient_request_permission() -> ScreenCapturePermission {
+    request_screen_capture_permission()
+}
+
+#[tauri::command]
+async fn ambient_get_status(ambient: State<'_, SharedAmbientEngine>) -> Result<AmbientStatus, String> {
+    let eng = ambient.lock().await;
+    Ok(eng.status())
+}
+
+#[tauri::command]
+async fn ambient_start(
+    settings: AmbientSettings,
+    brightness: u8,
+    ambient: State<'_, SharedAmbientEngine>,
+    lamp_state: State<'_, SharedLampState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let mut eng = ambient.lock().await;
+    eng.start(app, lamp_state.inner().clone(), settings, brightness)
+        .await?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn ambient_stop(
+    ambient: State<'_, SharedAmbientEngine>,
+    app: AppHandle,
+) -> Result<(), String> {
+    stop_ambient_engine(
+        ambient.inner(),
+        Some(&app),
+        AmbientStopReason::User,
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn ambient_update_settings(
+    settings: AmbientSettings,
+    brightness: Option<u8>,
+    ambient: State<'_, SharedAmbientEngine>,
+) -> Result<(), String> {
+    let eng = ambient.lock().await;
+    eng.update_settings(settings, brightness).await;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let lamp_state: SharedLampState = Arc::new(Mutex::new(LampState::new()));
+    let ambient_engine: SharedAmbientEngine = Arc::new(Mutex::new(AmbientEngine::default()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(lamp_state)
+        .manage(lamp_state.clone())
+        .manage(ambient_engine.clone())
         .invoke_handler(tauri::generate_handler![
             connect_lamp,
             disconnect_lamp,
@@ -192,7 +231,31 @@ pub fn run() {
             get_known_device,
             load_state,
             save_state,
+            ambient_check_permission,
+            ambient_request_permission,
+            ambient_get_status,
+            ambient_start,
+            ambient_stop,
+            ambient_update_settings,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(move |app_handle, event| {
+            if let RunEvent::Exit = event {
+                let ambient = ambient_engine.clone();
+                let app = app_handle.clone();
+                tauri::async_runtime::block_on(async {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        stop_ambient_engine(
+                            &ambient,
+                            Some(&app),
+                            AmbientStopReason::User,
+                            None,
+                        ),
+                    )
+                    .await;
+                });
+            }
+        });
 }
