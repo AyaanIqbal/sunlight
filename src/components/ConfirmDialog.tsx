@@ -1,0 +1,53 @@
+interface ConfirmDialogProps {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+export function ConfirmDialog({
+  title,
+  message,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  danger = false,
+  onConfirm,
+  onCancel,
+}: ConfirmDialogProps) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      onClick={onCancel}
+    >
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div
+        className="relative z-10 w-80 rounded-xl border border-[#2e2e38] bg-[#1e1e24] p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="mb-1 text-sm font-semibold text-[#f0f0f4]">{title}</h3>
+        <p className="mb-5 text-xs text-[#9090a0] leading-relaxed">{message}</p>
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            className="rounded-lg px-3 py-1.5 text-xs font-medium text-[#9090a0] hover:bg-[#2e2e38] transition-colors"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            onClick={onConfirm}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              danger
+                ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                : "bg-[#ff8040]/20 text-[#ff8040] hover:bg-[#ff8040]/30"
+            }`}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
