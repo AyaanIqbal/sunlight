@@ -1,53 +1,33 @@
 import { v4 as uuidv4 } from "uuid";
 import type { LampPreset, PresetSection } from "./types";
-import { rgbToHex } from "./colorUtils";
+import { defaultGradient, rgbToHex } from "./colorUtils";
+
+function presetDef(
+  name: string,
+  r: number,
+  g: number,
+  b: number,
+  brightness = 64
+): Omit<LampPreset, "id" | "createdAt" | "updatedAt"> {
+  return { name, r, g, b, brightness, gradient: defaultGradient(r, g, b) };
+}
+
+const MY_PRESET_DEFS = [
+  presetDef("Intense Red", 255, 17, 0),
+  presetDef("Orange Sunset", 255, 128, 0),
+  presetDef("Ocean Blue-Green", 0, 255, 255),
+];
+
+const BASIC_COLOUR_DEFS = [
+  presetDef("Blue", 0, 0, 255),
+  presetDef("Red", 255, 0, 0),
+  presetDef("Green", 0, 255, 0),
+  presetDef("Pink", 255, 0, 255),
+];
 
 export const DEFAULT_PRESETS: Omit<LampPreset, "id" | "createdAt" | "updatedAt">[] = [
-  {
-    name: "Orange Sunset",
-    r: 255, g: 128, b: 0, brightness: 64,
-    gradient: { borderColor: "#FFB000", mainColor: "#FF8000", middleColor: "#FF4A00" },
-  },
-  {
-    name: "Dark Orange",
-    r: 255, g: 80, b: 10, brightness: 64,
-    gradient: { borderColor: "#FF7A1A", mainColor: "#FF500A", middleColor: "#D93A00" },
-  },
-  {
-    name: "Reddish Orange",
-    r: 255, g: 40, b: 0, brightness: 64,
-    gradient: { borderColor: "#FF5A00", mainColor: "#FF2800", middleColor: "#CC1F00" },
-  },
-  {
-    name: "Red",
-    r: 255, g: 0, b: 0, brightness: 64,
-    gradient: { borderColor: "#FF0000", mainColor: "#FF0000", middleColor: "#FF0000" },
-  },
-  {
-    name: "Pink Purple",
-    r: 255, g: 0, b: 255, brightness: 64,
-    gradient: { borderColor: "#FF7AFF", mainColor: "#FF00FF", middleColor: "#A000FF" },
-  },
-  {
-    name: "Blue Green Border",
-    r: 0, g: 255, b: 255, brightness: 64,
-    gradient: { borderColor: "#00FFAA", mainColor: "#00D5FF", middleColor: "#008CFF" },
-  },
-  {
-    name: "Pink Yellow Border",
-    r: 255, g: 255, b: 255, brightness: 64,
-    gradient: { borderColor: "#FFE066", mainColor: "#FFB3D9", middleColor: "#FFD1E8" },
-  },
-  {
-    name: "Green",
-    r: 0, g: 255, b: 0, brightness: 64,
-    gradient: { borderColor: "#00FF00", mainColor: "#00FF00", middleColor: "#00FF00" },
-  },
-  {
-    name: "Blue",
-    r: 0, g: 0, b: 255, brightness: 64,
-    gradient: { borderColor: "#0000FF", mainColor: "#0000FF", middleColor: "#0000FF" },
-  },
+  ...MY_PRESET_DEFS,
+  ...BASIC_COLOUR_DEFS,
 ];
 
 export function makePreset(
@@ -70,10 +50,19 @@ export function makeSection(name: string): PresetSection {
 }
 
 export function seedDefaults(): { presets: LampPreset[]; sections: PresetSection[] } {
-  const presets = DEFAULT_PRESETS.map((p) => makePreset(p));
-  const section = makeSection("My Presets");
-  section.presetIds = presets.map((p) => p.id);
-  return { presets, sections: [section] };
+  const myPresets = MY_PRESET_DEFS.map((p) => makePreset(p));
+  const basicPresets = BASIC_COLOUR_DEFS.map((p) => makePreset(p));
+
+  const mySection = makeSection("My Presets");
+  mySection.presetIds = myPresets.map((p) => p.id);
+
+  const basicSection = makeSection("Basic Colours");
+  basicSection.presetIds = basicPresets.map((p) => p.id);
+
+  return {
+    presets: [...myPresets, ...basicPresets],
+    sections: [mySection, basicSection],
+  };
 }
 
 export function gradientStyle(preset: LampPreset): string {

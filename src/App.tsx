@@ -1,15 +1,53 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { save, open } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { Settings } from "lucide-react";
-import type { AppState, ConnectionStatus, LampPreset, PresetSection } from "./types";
+import type {
+  AppState,
+  ConnectionStatus,
+  LampLoop,
+  LampPreset,
+  LoopSection,
+  PresetSection,
+  WorkspaceTab,
+} from "./types";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { ColorControlPanel } from "./components/ColorControlPanel";
-import { PresetPanel } from "./components/PresetPanel";
+import { RightWorkspacePanel } from "./components/RightWorkspacePanel";
 import { PresetEditorModal } from "./components/PresetEditorModal";
 import { SettingsModal } from "./components/SettingsModal";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { Toast, useToast } from "./components/Toast";
 import { loadAppState, saveAppState } from "./storage";
+import { createFreshAppState } from "./migrateState";
 import { seedDefaults } from "./presets";
-import { connectLamp, setColor } from "./lampApi";
+import { seedLoopDefaults } from "./loops";
+import { connectLamp } from "./lampApi";
 import { animateColorTransition, cancelTransition } from "./transition";
+import {
+  canSend,
+  formatConnectionError,
+  initConnectionManager,
+  safeSetColor,
+  verifyOnResume,
+} from "./connectionManager";
+import {
+  initLoopRunner,
+  startLoop,
+  stopLoop,
+  getActiveLoopId,
+} from "./loopRunner";
+import {
+  buildExportBundle,
+  getDefaultExportFilename,
+  parseImportJson,
+} from "./exportImport";
+
+type ConfirmState =
+  | { type: "import"; data: AppState }
+  | { type: "resetPresets" }
+  | null;
 
 export default function App() {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
@@ -22,17 +60,27 @@ export default function App() {
   const [autoConnect, setAutoConnect] = useState(false);
   const [transitionEnabled, setTransitionEnabled] = useState(true);
   const [transitionDurationMs, setTransitionDurationMs] = useState(1200);
+  const [workspace, setWorkspace] = useState<WorkspaceTab>("presets");
   const [presets, setPresets] = useState<LampPreset[]>([]);
   const [sections, setSections] = useState<PresetSection[]>([]);
+  const [loops, setLoops] = useState<LampLoop[]>([]);
+  const [loopSections, setLoopSections] = useState<LoopSection[]>([]);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const [activeLoopId, setActiveLoopId] = useState<string | null>(null);
+  const [runningLoopId, setRunningLoopId] = useState<string | null>(null);
+  const [runningLoopName, setRunningLoopName] = useState<string | null>(null);
   const [saveCurrentModal, setSaveCurrentModal] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmState>(null);
   const [loaded, setLoaded] = useState(false);
+  const { toast, showToast } = useToast();
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const colorRef = useRef({ r, g, b, brightness });
   const transitionSettingsRef = useRef({ transitionEnabled, transitionDurationMs });
   const statusRef = useRef(status);
+  const autoConnectRef = useRef(autoConnect);
+  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     colorRef.current = { r, g, b, brightness };
@@ -46,7 +94,76 @@ export default function App() {
     statusRef.current = status;
   }, [status]);
 
-  // Load persisted state on mount
+  useEffect(() => {
+    autoConnectRef.current = autoConnect;
+  }, [autoConnect]);
+
+  useEffect(() => {
+    initConnectionManager({
+      getStatus: () => statusRef.current,
+      setStatus,
+      setError,
+      getAutoConnect: () => autoConnectRef.current,
+    });
+
+    initLoopRunner({
+      onColorChange: (color) => {
+        setR(color.r);
+        setG(color.g);
+        setB(color.b);
+        setBrightness(color.brightness);
+        setActivePresetId(null);
+      },
+      onRunningChange: (loopId, loopName) => {
+        setRunningLoopId(loopId);
+        setRunningLoopName(loopName ?? null);
+        setActiveLoopId(loopId);
+        if (!loopId) setActiveLoopId(null);
+      },
+      onStopped: (reason) => {
+        if (reason === "connection_lost" || reason === "disconnect") {
+          showToast("Loop stopped — connection lost.", "error");
+        }
+      },
+      getConnected: () => statusRef.current === "connected",
+    });
+  }, [showToast]);
+
+  useEffect(() => {
+    if (status !== "connected" && getActiveLoopId()) {
+      stopLoop(status === "disconnected" ? "disconnect" : "connection_lost");
+    }
+  }, [status]);
+
+  const scheduleVerifyOnResume = useCallback(() => {
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    resumeTimerRef.current = setTimeout(() => {
+      void verifyOnResume();
+    }, 500);
+  }, []);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") scheduleVerifyOnResume();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    let unlistenFocus: (() => void) | undefined;
+    void getCurrentWindow()
+      .listen("tauri://focus", scheduleVerifyOnResume)
+      .then((fn) => {
+        unlistenFocus = fn;
+      })
+      .catch(() => {});
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      unlistenFocus?.();
+      if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+      stopLoop("user");
+    };
+  }, [scheduleVerifyOnResume]);
+
   useEffect(() => {
     (async () => {
       const state = await loadAppState();
@@ -59,42 +176,53 @@ export default function App() {
         setAutoConnect(state.settings.autoConnect);
         setTransitionEnabled(state.settings.transitionEnabled ?? true);
         setTransitionDurationMs(state.settings.transitionDurationMs ?? 1200);
+        setWorkspace("presets");
         setPresets(state.presets);
         setSections(state.sections);
+        setLoops(state.loops);
+        setLoopSections(state.loopSections);
 
         if (state.settings.autoConnect) {
+          setStatus("scanning");
           try {
             await connectLamp();
             setStatus("connected");
-          } catch {
+          } catch (e: unknown) {
             setStatus("failed");
+            setError(formatConnectionError(e));
           }
         }
       } else {
-        const { presets: defaultPresets, sections: defaultSections } = seedDefaults();
-        setPresets(defaultPresets);
-        setSections(defaultSections);
+        const fresh = createFreshAppState();
+        setWorkspace("presets");
+        setPresets(fresh.presets);
+        setSections(fresh.sections);
+        setLoops(fresh.loops);
+        setLoopSections(fresh.loopSections);
       }
       setLoaded(true);
     })();
   }, []);
 
-  // Debounced auto-save whenever state changes
   const doPersist = useCallback(() => {
     if (!loaded) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       const state: AppState = {
+        schemaVersion: 2,
         settings: {
           deviceName: "SSL-99A4C3",
           autoConnect,
           liveUpdate,
           transitionEnabled,
           transitionDurationMs,
+          activeWorkspace: workspace,
           lastColor: { r, g, b, brightness },
         },
         sections,
         presets,
+        loopSections,
+        loops,
       };
       saveAppState(state);
     }, 500);
@@ -104,12 +232,15 @@ export default function App() {
     liveUpdate,
     transitionEnabled,
     transitionDurationMs,
+    workspace,
     r,
     g,
     b,
     brightness,
     sections,
     presets,
+    loopSections,
+    loops,
   ]);
 
   useEffect(() => {
@@ -117,17 +248,21 @@ export default function App() {
   }, [doPersist]);
 
   const handleColorChange = (nr: number, ng: number, nb: number, nbr: number) => {
+    if (getActiveLoopId()) stopLoop("manual_color");
     cancelTransition();
     setR(nr);
     setG(ng);
     setB(nb);
     setBrightness(nbr);
     setActivePresetId(null);
+    setActiveLoopId(null);
   };
 
   const handleActivatePreset = (preset: LampPreset) => {
+    if (getActiveLoopId()) stopLoop("preset");
     cancelTransition();
     setActivePresetId(preset.id);
+    setActiveLoopId(null);
 
     const from = colorRef.current;
     const to = {
@@ -151,7 +286,7 @@ export default function App() {
           setB(color.b);
           setBrightness(color.brightness);
         },
-        { sendToLamp: connected }
+        { sendToLamp: connected, canSend }
       );
       return;
     }
@@ -160,8 +295,30 @@ export default function App() {
     setG(to.g);
     setB(to.b);
     setBrightness(to.brightness);
-    if (connected) {
-      void setColor(to.r, to.g, to.b, to.brightness);
+    if (connected) void safeSetColor(to.r, to.g, to.b, to.brightness);
+  };
+
+  const handleRunLoop = (loop: LampLoop) => {
+    if (getActiveLoopId() === loop.id) return;
+    cancelTransition();
+    setActivePresetId(null);
+    const result = startLoop(loop);
+    if (!result.ok) {
+      showToast(result.error, "error");
+      return;
+    }
+    showToast(`Running "${loop.name}"`);
+  };
+
+  const handleStopLoop = () => {
+    stopLoop("user");
+    showToast("Loop stopped.");
+  };
+
+  const handleLoopEdited = (loopId: string) => {
+    if (getActiveLoopId() === loopId) {
+      stopLoop("edited");
+      showToast("Loop stopped — edit saved. Run again to play changes.");
     }
   };
 
@@ -192,7 +349,82 @@ export default function App() {
     setSaveCurrentModal(false);
   };
 
+  const applyImportedState = (data: AppState) => {
+    stopLoop("import");
+    setR(data.settings.lastColor.r);
+    setG(data.settings.lastColor.g);
+    setB(data.settings.lastColor.b);
+    setBrightness(data.settings.lastColor.brightness);
+    setLiveUpdate(data.settings.liveUpdate);
+    setAutoConnect(data.settings.autoConnect);
+    setTransitionEnabled(data.settings.transitionEnabled);
+    setTransitionDurationMs(data.settings.transitionDurationMs);
+    setWorkspace(data.settings.activeWorkspace ?? "presets");
+    setPresets(data.presets);
+    setSections(data.sections);
+    setLoops(data.loops);
+    setLoopSections(data.loopSections);
+    setActivePresetId(null);
+    setActiveLoopId(null);
+    void saveAppState(data);
+  };
+
+  const handleExport = async () => {
+    try {
+      const state: AppState = {
+        schemaVersion: 2,
+        settings: {
+          deviceName: "SSL-99A4C3",
+          autoConnect,
+          liveUpdate,
+          transitionEnabled,
+          transitionDurationMs,
+          activeWorkspace: workspace,
+          lastColor: { r, g, b, brightness },
+        },
+        sections,
+        presets,
+        loopSections,
+        loops,
+      };
+      const bundle = buildExportBundle(state);
+      const path = await save({
+        defaultPath: getDefaultExportFilename(),
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      await writeTextFile(path, JSON.stringify(bundle, null, 2));
+      showToast("Configuration exported successfully.");
+    } catch {
+      showToast("Failed to export configuration.", "error");
+    }
+  };
+
+  const handleImportPick = async () => {
+    try {
+      const path = await open({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path || Array.isArray(path)) return;
+      const text = await readTextFile(path);
+      const result = parseImportJson(text);
+      if (!result.ok) {
+        showToast(result.error, "error");
+        return;
+      }
+      setConfirm({ type: "import", data: result.data });
+    } catch {
+      showToast("Failed to read backup file.", "error");
+    }
+  };
+
+  const handleResetPresets = () => {
+    setConfirm({ type: "resetPresets" });
+  };
+
   const connected = status === "connected";
+  const recovering = status === "stale" || status === "reconnecting";
 
   if (!loaded) {
     return (
@@ -204,11 +436,15 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col bg-[#111114]">
-      {/* Header */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-[#1e1e24] flex-shrink-0">
         <div className="flex items-center gap-2">
           <div className="h-2.5 w-2.5 rounded-full bg-[#ff8040]" />
           <h1 className="text-sm font-semibold text-[#f0f0f4]">Sunset Lamp Controller</h1>
+          {runningLoopName && (
+            <span className="text-[10px] text-[#60a5fa] hidden sm:inline">
+              ↺ {runningLoopName}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -217,9 +453,18 @@ export default function App() {
               {connected && (
                 <span className="absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75 animate-ping" />
               )}
+              {recovering && (
+                <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
+              )}
               <span
                 className={`relative inline-flex h-2 w-2 rounded-full ${
-                  connected ? "bg-green-400" : "bg-[#555568]"
+                  connected
+                    ? "bg-green-400"
+                    : recovering
+                      ? "bg-amber-400"
+                      : status === "failed"
+                        ? "bg-red-400"
+                        : "bg-[#555568]"
                 }`}
               />
             </span>
@@ -236,9 +481,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Body */}
       <div className="flex flex-1 min-h-0 gap-0">
-        {/* Left panel */}
         <div className="w-72 flex-shrink-0 border-r border-[#1e1e24] flex flex-col overflow-y-auto p-4 gap-3">
           <ConnectionPanel
             status={status}
@@ -257,26 +500,54 @@ export default function App() {
             onColorChange={handleColorChange}
             onSaveAsPreset={() => setSaveCurrentModal(true)}
           />
+          {runningLoopName && (
+            <div className="rounded-xl border border-[#60a5fa]/30 bg-[#60a5fa]/5 px-3 py-2 flex items-center justify-between">
+              <span className="text-[11px] text-[#60a5fa] truncate">Loop: {runningLoopName}</span>
+              <button
+                onClick={handleStopLoop}
+                className="text-[10px] font-medium text-[#f87171] hover:underline flex-shrink-0 ml-2"
+              >
+                Stop
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Right panel */}
         <div className="flex-1 min-w-0 p-4 overflow-hidden flex flex-col">
-          <PresetPanel
+          <RightWorkspacePanel
+            workspace={workspace}
+            onWorkspaceChange={setWorkspace}
             presets={presets}
             sections={sections}
+            loops={loops}
+            loopSections={loopSections}
             activePresetId={activePresetId}
+            activeLoopId={activeLoopId}
+            runningLoopId={runningLoopId}
+            runningLoopName={runningLoopName}
             currentR={r}
             currentG={g}
             currentB={b}
             currentBrightness={brightness}
-            onActivate={handleActivatePreset}
+            connected={connected}
+            onActivatePreset={handleActivatePreset}
+            onRunLoop={handleRunLoop}
+            onStopLoop={handleStopLoop}
             onPresetsChange={setPresets}
             onSectionsChange={setSections}
+            onLoopsChange={(newLoops) => {
+              if (getActiveLoopId() && !newLoops.some((l) => l.id === getActiveLoopId())) {
+                stopLoop("deleted");
+              }
+              setLoops(newLoops);
+            }}
+            onLoopSectionsChange={setLoopSections}
+            onLoopEdited={handleLoopEdited}
+            onToast={showToast}
           />
         </div>
       </div>
 
-      {/* Save current as preset modal */}
       <PresetEditorModal
         open={saveCurrentModal}
         sections={sections}
@@ -285,6 +556,7 @@ export default function App() {
         currentG={g}
         currentB={b}
         currentBrightness={brightness}
+        connected={connected}
         onSave={handleSavePreset}
         onCancel={() => setSaveCurrentModal(false)}
       />
@@ -297,8 +569,52 @@ export default function App() {
         onTransitionEnabledChange={setTransitionEnabled}
         transitionDurationMs={transitionDurationMs}
         onTransitionDurationChange={setTransitionDurationMs}
+        onExport={handleExport}
+        onImport={handleImportPick}
+        onResetPresets={handleResetPresets}
         onClose={() => setSettingsOpen(false)}
       />
+
+      <ConfirmDialog
+        open={confirm?.type === "import"}
+        title="Import configuration?"
+        message="This will replace your current presets, loops, sections, and settings with the backup file."
+        confirmLabel="Import"
+        danger
+        onConfirm={() => {
+          if (confirm?.type === "import") {
+            applyImportedState(confirm.data);
+            showToast("Configuration imported successfully.");
+          }
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+
+      <ConfirmDialog
+        open={confirm?.type === "resetPresets"}
+        title="Reset to defaults?"
+        message="This will restore default presets and loops. Your app settings (auto-connect, transitions, etc.) will be kept."
+        confirmLabel="Reset"
+        danger
+        onConfirm={() => {
+          stopLoop("reset");
+          const { presets: defaultPresets, sections: defaultSections } = seedDefaults();
+          const { loops: defaultLoops, loopSections: defaultLoopSections } = seedLoopDefaults();
+          setPresets(defaultPresets);
+          setSections(defaultSections);
+          setLoops(defaultLoops);
+          setLoopSections(defaultLoopSections);
+          setActivePresetId(null);
+          setActiveLoopId(null);
+          setWorkspace("presets");
+          showToast("Presets and loops reset to defaults.");
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+
+      <Toast toast={toast} />
     </div>
   );
 }
