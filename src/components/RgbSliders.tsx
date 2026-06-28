@@ -1,5 +1,69 @@
 import { clamp } from "../colorUtils";
 
+interface LabeledSliderProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  color: string;
+  disabled?: boolean;
+  inputMin?: number;
+  allowOutOfRangeInput?: boolean;
+  onChange: (v: number) => void;
+}
+
+export function LabeledSlider({
+  label,
+  value,
+  min,
+  max,
+  color,
+  disabled = false,
+  inputMin,
+  allowOutOfRangeInput = false,
+  onChange,
+}: LabeledSliderProps) {
+  const pct = ((Math.min(value, max) - min) / (max - min)) * 100;
+  const floor = inputMin ?? min;
+
+  const handleNumberChange = (raw: string) => {
+    const parsed = parseInt(raw) || floor;
+    if (allowOutOfRangeInput) {
+      onChange(Math.max(floor, parsed));
+    } else {
+      onChange(clamp(parsed, min, max));
+    }
+  };
+
+  return (
+    <div className={`flex items-center gap-2.5 ${disabled ? "opacity-50" : ""}`}>
+      <span className="w-14 text-[10px] font-medium text-[#9090a0] flex-shrink-0">{label}</span>
+      <div className="flex-1 relative">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          value={Math.min(Math.max(value, min), max)}
+          disabled={disabled}
+          onChange={(e) => onChange(parseInt(e.target.value))}
+          className="w-full disabled:cursor-not-allowed"
+          style={{
+            background: `linear-gradient(90deg, ${color} ${pct}%, #2e2e38 ${pct}%)`,
+          }}
+        />
+      </div>
+      <input
+        type="number"
+        min={floor}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => handleNumberChange(e.target.value)}
+        className="w-14 rounded bg-[#1e1e24] border border-[#2e2e38] px-1 py-0.5 text-center text-[11px] font-mono text-[#f0f0f4] focus:outline-none focus:border-[#ff8040]/50 disabled:cursor-not-allowed"
+      />
+    </div>
+  );
+}
+
 interface SliderProps {
   label: string;
   value: number;
@@ -10,33 +74,15 @@ interface SliderProps {
 }
 
 function Slider({ label, value, min, max, color, onChange }: SliderProps) {
-  const pct = ((value - min) / (max - min)) * 100;
-
   return (
-    <div className="flex items-center gap-2.5">
-      <span className="w-2 text-[11px] font-semibold text-[#9090a0] flex-shrink-0">{label}</span>
-      <div className="flex-1 relative">
-        <input
-          type="range"
-          min={min}
-          max={max}
-          value={value}
-          onChange={(e) => onChange(parseInt(e.target.value))}
-          className="w-full"
-          style={{
-            background: `linear-gradient(90deg, ${color} ${pct}%, #2e2e38 ${pct}%)`,
-          }}
-        />
-      </div>
-      <input
-        type="number"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(e) => onChange(clamp(parseInt(e.target.value) || 0, min, max))}
-        className="w-10 rounded bg-[#1e1e24] border border-[#2e2e38] px-1 py-0.5 text-center text-[11px] font-mono text-[#f0f0f4] focus:outline-none focus:border-[#ff8040]/50"
-      />
-    </div>
+    <LabeledSlider
+      label={label}
+      value={value}
+      min={min}
+      max={max}
+      color={color}
+      onChange={onChange}
+    />
   );
 }
 

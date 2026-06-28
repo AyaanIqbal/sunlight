@@ -4,6 +4,7 @@ import type { LampPreset, PresetSection } from "../types";
 import { clamp, defaultGradient, rgbToHex } from "../colorUtils";
 import { SelectField } from "./SelectField";
 import { Modal } from "./Modal";
+import { ColorSwatchButton } from "./ColorSwatchButton";
 import { v4 as uuidv4 } from "uuid";
 
 interface PresetEditorModalProps {
@@ -15,6 +16,7 @@ interface PresetEditorModalProps {
   currentG?: number;
   currentB?: number;
   currentBrightness?: number;
+  connected?: boolean;
   onSave: (preset: LampPreset, sectionId: string) => void;
   onCancel: () => void;
 }
@@ -62,6 +64,7 @@ export function PresetEditorModal({
   currentG = 128,
   currentB = 0,
   currentBrightness = 64,
+  connected = false,
   onSave,
   onCancel,
 }: PresetEditorModalProps) {
@@ -201,9 +204,20 @@ export function PresetEditorModal({
           </div>
 
           <div className="flex items-center gap-2">
-            <div
-              className="h-5 w-5 rounded border border-white/10"
-              style={{ backgroundColor: derivedHex }}
+            <ColorSwatchButton
+              r={r}
+              g={g}
+              b={b}
+              brightness={brightness}
+              connected={connected}
+              livePreview
+              size="md"
+              onChange={(nr, ng, nb, nbr) => {
+                setR(nr);
+                setG(ng);
+                setB(nb);
+                setBrightness(nbr);
+              }}
             />
             <span className="text-[11px] font-mono text-[#555568]">{derivedHex}</span>
           </div>

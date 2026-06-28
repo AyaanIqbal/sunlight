@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -26,9 +26,14 @@ interface PresetPanelProps {
   currentG: number;
   currentB: number;
   currentBrightness: number;
+  connected?: boolean;
   onActivate: (preset: LampPreset) => void;
   onPresetsChange: (presets: LampPreset[]) => void;
   onSectionsChange: (sections: PresetSection[]) => void;
+  onToast?: (message: string, variant?: "info" | "error") => void;
+  embedded?: boolean;
+  externalModal?: "newPreset" | "newSection" | null;
+  onExternalModalHandled?: () => void;
 }
 
 type ModalState =
@@ -48,21 +53,37 @@ export function PresetPanel({
   currentG,
   currentB,
   currentBrightness,
+  connected = false,
   onActivate,
   onPresetsChange,
   onSectionsChange,
+  onToast,
+  embedded = false,
+  externalModal,
+  onExternalModalHandled,
 }: PresetPanelProps) {
   const [modal, setModal] = useState<ModalState>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [localToast, setLocalToast] = useState<string | null>(null);
   const [dragOverlayPreset, setDragOverlayPreset] = useState<LampPreset | null>(null);
+
+  useEffect(() => {
+    if (!externalModal) return;
+    if (externalModal === "newPreset") setModal({ type: "newPreset" });
+    if (externalModal === "newSection") setModal({ type: "newSection" });
+    onExternalModalHandled?.();
+  }, [externalModal, onExternalModalHandled]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 3000);
+  const showToast = (msg: string, variant: "info" | "error" = "info") => {
+    if (onToast) {
+      onToast(msg, variant);
+      return;
+    }
+    setLocalToast(msg);
+    setTimeout(() => setLocalToast(null), 3000);
   };
 
   const defaultSectionId = sections[0]?.id ?? "";
@@ -214,27 +235,28 @@ export function PresetPanel({
   };
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3 flex-shrink-0">
-        <h2 className="text-xs font-semibold text-[#9090a0] uppercase tracking-wider">Presets</h2>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setModal({ type: "newSection" })}
-            className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-[#555568] hover:text-[#9090a0] hover:bg-[#1e1e24] transition-colors"
-            title="New section"
-          >
-            <FolderPlus size={12} />
-          </button>
-          <button
-            onClick={() => setModal({ type: "newPreset" })}
-            className="flex items-center gap-1.5 rounded-lg bg-[#ff8040]/15 px-2.5 py-1 text-xs font-medium text-[#ff8040] hover:bg-[#ff8040]/25 transition-colors"
-          >
-            <Plus size={12} />
-            New Preset
-          </button>
+    <div className="h-full flex flex-col flex-1 min-h-0">
+      {!embedded && (
+        <div className="flex items-center justify-between mb-3 flex-shrink-0">
+          <h2 className="text-xs font-semibold text-[#9090a0] uppercase tracking-wider">Presets</h2>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setModal({ type: "newSection" })}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-[#555568] hover:text-[#9090a0] hover:bg-[#1e1e24] transition-colors"
+              title="New section"
+            >
+              <FolderPlus size={12} />
+            </button>
+            <button
+              onClick={() => setModal({ type: "newPreset" })}
+              className="flex items-center gap-1.5 rounded-lg bg-[#ff8040]/15 px-2.5 py-1 text-xs font-medium text-[#ff8040] hover:bg-[#ff8040]/25 transition-colors"
+            >
+              <Plus size={12} />
+              New Preset
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Scrollable sections list */}
       <div className="flex-1 overflow-y-auto space-y-3 pr-1">
@@ -294,9 +316,9 @@ export function PresetPanel({
       </div>
 
       {/* Toast */}
-      {toast && (
+      {!onToast && localToast && (
         <div className="mt-2 rounded-lg bg-[#1e1e24] border border-[#2e2e38] px-3 py-2 text-xs text-[#9090a0] flex-shrink-0">
-          {toast}
+          {localToast}
         </div>
       )}
 
@@ -309,6 +331,7 @@ export function PresetPanel({
         currentG={currentG}
         currentB={currentB}
         currentBrightness={currentBrightness}
+        connected={connected}
         onSave={handleSavePreset}
         onCancel={() => setModal(null)}
       />
@@ -318,6 +341,7 @@ export function PresetPanel({
         preset={modal?.type === "editPreset" ? modal.preset : undefined}
         sections={sections}
         defaultSectionId={defaultSectionId}
+        connected={connected}
         onSave={handleSavePreset}
         onCancel={() => setModal(null)}
       />

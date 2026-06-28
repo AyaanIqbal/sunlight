@@ -5,10 +5,19 @@ interface ColorWheelPickerProps {
   r: number;
   g: number;
   b: number;
+  size?: number;
+  showHint?: boolean;
   onChange: (r: number, g: number, b: number) => void;
 }
 
-export function ColorWheelPicker({ r, g, b, onChange }: ColorWheelPickerProps) {
+export function ColorWheelPicker({
+  r,
+  g,
+  b,
+  size = 180,
+  showHint = true,
+  onChange,
+}: ColorWheelPickerProps) {
   const hex = rgbToHex(r, g, b);
 
   return (
@@ -19,10 +28,12 @@ export function ColorWheelPicker({ r, g, b, onChange }: ColorWheelPickerProps) {
           const rgb = hexToRgb(color.hex);
           if (rgb) onChange(rgb.r, rgb.g, rgb.b);
         }}
-        width={180}
-        height={180}
+        width={size}
+        height={size}
       />
-      <p className="text-[10px] text-[#555568]">Brightness controlled separately</p>
+      {showHint && (
+        <p className="text-[10px] text-[#555568]">Brightness controlled separately</p>
+      )}
     </div>
   );
 }
