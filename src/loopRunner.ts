@@ -7,6 +7,7 @@ export type LoopStopReason =
   | "manual_color"
   | "preset"
   | "another_loop"
+  | "ambient"
   | "disconnect"
   | "connection_lost"
   | "import"
