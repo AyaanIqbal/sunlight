@@ -1,4 +1,6 @@
 mod ambient;
+mod ble_write;
+mod connection_events;
 mod errors;
 mod lamp;
 mod protocol;
@@ -11,9 +13,12 @@ use crate::ambient::{
     AmbientEngine, AmbientSettings, AmbientStatus, AmbientStopReason, ScreenCapturePermission,
     SharedAmbientEngine,
 };
+use crate::ble_write::{write_color_if_connected, WritePriority};
+use crate::connection_events::init_connection_events;
+use crate::connection_events::emit_connection_status;
 use crate::errors::LampError;
 use crate::lamp::disconnect_peripheral;
-use crate::reconnect::{perform_connect, write_color_if_connected};
+use crate::reconnect::{perform_connect, spawn_auto_reconnect, spawn_connection_watchdog};
 use crate::state::{ConnectMode, ConnectionStatus, LampState, SharedLampState};
 use crate::store::AppState;
 
@@ -23,40 +28,59 @@ use tauri::{AppHandle, RunEvent, State};
 use tokio::sync::Mutex;
 
 async fn sync_status_with_peripheral(state: &SharedLampState) -> ConnectionStatus {
-    let mut s = state.lock().await;
+    let (status, should_reconnect) = {
+        let mut s = state.lock().await;
 
-    if s.reconnect_in_progress {
-        return s.status.clone();
-    }
-
-    if matches!(
-        s.status,
-        ConnectionStatus::Scanning
-            | ConnectionStatus::Connecting
-            | ConnectionStatus::Reconnecting
-    ) {
-        return s.status.clone();
-    }
-
-    if let Some(ref p) = s.peripheral {
-        match p.is_connected().await {
-            Ok(true) => {
-                if s.status != ConnectionStatus::Connected {
-                    s.status = ConnectionStatus::Connected;
-                }
-                return ConnectionStatus::Connected;
-            }
-            _ => {
-                if s.status == ConnectionStatus::Connected {
-                    s.status = ConnectionStatus::Stale;
-                    s.peripheral.take();
-                }
-                return s.status.clone();
-            }
+        if s.reconnect_in_progress {
+            return s.status.clone();
         }
+
+        if matches!(
+            s.status,
+            ConnectionStatus::Scanning
+                | ConnectionStatus::Connecting
+                | ConnectionStatus::Reconnecting
+        ) {
+            return s.status.clone();
+        }
+
+        if let Some(ref p) = s.peripheral {
+            match p.is_connected().await {
+                Ok(true) => {
+                    if s.status != ConnectionStatus::Connected {
+                        s.status = ConnectionStatus::Connected;
+                    }
+                    (ConnectionStatus::Connected, false)
+                }
+                _ => {
+                    if s.status == ConnectionStatus::Connected {
+                        s.status = ConnectionStatus::Stale;
+                        s.peripheral.take();
+                        emit_connection_status(&ConnectionStatus::Stale);
+                    }
+                    let should_reconnect = !s.user_disconnected
+                        && matches!(
+                            s.status,
+                            ConnectionStatus::Stale | ConnectionStatus::Failed
+                        );
+                    (s.status.clone(), should_reconnect)
+                }
+            }
+        } else {
+            let should_reconnect = !s.user_disconnected
+                && matches!(
+                    s.status,
+                    ConnectionStatus::Stale | ConnectionStatus::Failed
+                );
+            (s.status.clone(), should_reconnect)
+        }
+    };
+
+    if should_reconnect {
+        spawn_auto_reconnect(state.clone());
     }
 
-    s.status.clone()
+    status
 }
 
 #[tauri::command]
@@ -136,7 +160,7 @@ async fn set_color(
     brightness: u8,
     state: State<'_, SharedLampState>,
 ) -> Result<(), LampError> {
-    write_color_if_connected(&state, r, g, b, brightness).await
+    write_color_if_connected(&state, r, g, b, brightness, WritePriority::User).await
 }
 
 #[tauri::command]
@@ -179,8 +203,14 @@ async fn ambient_start(
     app: AppHandle,
 ) -> Result<(), String> {
     let mut eng = ambient.lock().await;
-    eng.start(app, lamp_state.inner().clone(), settings, brightness)
-        .await?;
+    eng.start(
+        app,
+        lamp_state.inner().clone(),
+        settings,
+        brightness,
+        ambient.inner().clone(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -220,6 +250,11 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(lamp_state.clone())
         .manage(ambient_engine.clone())
+        .setup(move |app| {
+            init_connection_events(app.handle().clone());
+            spawn_connection_watchdog(lamp_state.clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             connect_lamp,
             disconnect_lamp,

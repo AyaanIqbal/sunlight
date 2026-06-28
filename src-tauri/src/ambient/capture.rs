@@ -1,3 +1,5 @@
+use tokio::task::JoinHandle;
+
 pub struct FrameData {
     pub pixels: Vec<u8>,
     pub width: u32,
@@ -7,11 +9,28 @@ pub struct FrameData {
     pub downsample_ms: f32,
 }
 
+/// Result of polling the single in-flight capture task.
+pub enum CapturePollResult {
+    /// Capture task still running.
+    InFlight,
+    /// Fresh frame for the current generation.
+    Ready(FrameData),
+    /// xcap returned no frame.
+    Failed,
+    /// Result discarded (session stopped or generation mismatch).
+    StaleDiscarded,
+}
+
+type CaptureTask = JoinHandle<(u64, Option<FrameData>)>;
+
 pub struct CaptureSession {
     #[cfg(target_os = "macos")]
     monitor_id: u32,
     pub width: u32,
     pub height: u32,
+    generation: u64,
+    in_flight: Option<(u64, CaptureTask)>,
+    stopped: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -71,6 +90,9 @@ impl CaptureSession {
                 monitor_id,
                 width,
                 height,
+                generation: 0,
+                in_flight: None,
+                stopped: false,
             });
         }
 
@@ -81,23 +103,80 @@ impl CaptureSession {
         }
     }
 
-    pub async fn next_frame(&mut self) -> Option<FrameData> {
+    pub fn has_in_flight(&self) -> bool {
+        self.in_flight
+            .as_ref()
+            .is_some_and(|(_, h)| !h.is_finished())
+    }
+
+    pub fn capture_in_flight(&self) -> bool {
+        self.has_in_flight()
+    }
+
+    /// Start a capture if none is in flight. Returns false if busy or stopped.
+    pub fn begin_capture(&mut self) -> bool {
+        if self.stopped || self.has_in_flight() {
+            return false;
+        }
+
+        self.generation = self.generation.wrapping_add(1);
+        let gen = self.generation;
+
         #[cfg(target_os = "macos")]
         {
             let monitor_id = self.monitor_id;
             let width = self.width;
             let height = self.height;
-            return tokio::task::spawn_blocking(move || capture_frame_blocking(monitor_id, width, height))
-                .await
-                .ok()
-                .flatten();
+            let handle = tokio::task::spawn_blocking(move || {
+                (gen, capture_frame_blocking(monitor_id, width, height))
+            });
+            self.in_flight = Some((gen, handle));
+            true
         }
 
         #[cfg(not(target_os = "macos"))]
         {
-            None
+            false
         }
     }
 
-    pub async fn stop(self) {}
+    /// Poll the in-flight capture. Does not spawn new tasks.
+    pub async fn poll(&mut self) -> CapturePollResult {
+        if self.stopped {
+            return CapturePollResult::StaleDiscarded;
+        }
+
+        let Some((gen, handle)) = self.in_flight.take() else {
+            return CapturePollResult::Failed;
+        };
+
+        if !handle.is_finished() {
+            self.in_flight = Some((gen, handle));
+            return CapturePollResult::InFlight;
+        }
+
+        match handle.await {
+            Ok((result_gen, frame)) if result_gen == self.generation && !self.stopped => {
+                match frame {
+                    Some(data) => CapturePollResult::Ready(data),
+                    None => CapturePollResult::Failed,
+                }
+            }
+            Ok(_) => CapturePollResult::StaleDiscarded,
+            Err(_) => CapturePollResult::Failed,
+        }
+    }
+
+    /// Bump generation so any in-flight result is discarded when it completes.
+    pub fn invalidate_in_flight(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    pub async fn stop(&mut self) {
+        self.stopped = true;
+        self.invalidate_in_flight();
+        if let Some((_, handle)) = self.in_flight.take() {
+            let _ = handle.await;
+        }
+    }
 }

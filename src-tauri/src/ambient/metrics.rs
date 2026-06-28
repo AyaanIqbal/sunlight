@@ -1,4 +1,8 @@
+use super::adaptive::AdaptiveSnapshot;
 use super::types::{AmbientDebugMetrics, AmbientSettings};
+use crate::ble_write::{
+    global_write_gate_busy_count, global_write_in_flight, global_write_timeout_count,
+};
 use std::time::Instant;
 
 const EMA_ALPHA: f32 = 0.1;
@@ -38,6 +42,13 @@ pub struct AmbientMetricsCollector {
     ble_write_last: f32,
 
     capture_failures: u32,
+    consecutive_capture_failures: u32,
+    capture_timeouts: u32,
+    stale_capture_discarded: u32,
+    capture_in_flight: bool,
+    capture_backoff_active: bool,
+    last_stop_reason: Option<String>,
+
     ble_write_failures: u32,
     skipped_due_to_delta: u32,
     skipped_due_to_rate_limit: u32,
@@ -76,6 +87,12 @@ impl Default for AmbientMetricsCollector {
             processing_last: 0.0,
             ble_write_last: 0.0,
             capture_failures: 0,
+            consecutive_capture_failures: 0,
+            capture_timeouts: 0,
+            stale_capture_discarded: 0,
+            capture_in_flight: false,
+            capture_backoff_active: false,
+            last_stop_reason: None,
             ble_write_failures: 0,
             skipped_due_to_delta: 0,
             skipped_due_to_rate_limit: 0,
@@ -104,12 +121,35 @@ impl AmbientMetricsCollector {
         self.capture_avg.record(total_ms);
         self.downsample_avg.record(downsample_ms);
         self.capture_last = total_ms;
+        self.consecutive_capture_failures = 0;
         self.push_sample_time();
         self.last_frame_at = Some(Instant::now());
     }
 
     pub fn record_capture_failure(&mut self) {
         self.capture_failures += 1;
+        self.consecutive_capture_failures += 1;
+    }
+
+    pub fn record_capture_timeout(&mut self) {
+        self.capture_timeouts += 1;
+        self.record_capture_failure();
+    }
+
+    pub fn record_stale_capture_discarded(&mut self) {
+        self.stale_capture_discarded += 1;
+    }
+
+    pub fn set_capture_in_flight(&mut self, in_flight: bool) {
+        self.capture_in_flight = in_flight;
+    }
+
+    pub fn set_capture_backoff_active(&mut self, active: bool) {
+        self.capture_backoff_active = active;
+    }
+
+    pub fn set_last_stop_reason(&mut self, reason: &str) {
+        self.last_stop_reason = Some(reason.to_string());
     }
 
     pub fn record_processing(&mut self, total_ms: f32, algorithm_ms: f32) {
@@ -177,9 +217,53 @@ impl AmbientMetricsCollector {
         self.sustain_notice_sent = false;
     }
 
+    pub fn capture_fps(&self) -> f32 {
+        compute_fps(&self.sample_times)
+    }
+
+    pub fn actual_output_fps(&self) -> f32 {
+        compute_fps(&self.ble_times)
+    }
+
+    pub fn capture_time_avg(&self) -> f32 {
+        self.capture_avg.value()
+    }
+
+    pub fn processing_time_avg(&self) -> f32 {
+        self.processing_avg.value()
+    }
+
+    pub fn ble_write_time_avg(&self) -> f32 {
+        self.ble_write_avg.value()
+    }
+
+    pub fn ble_busy_skips(&self) -> u32 {
+        self.ble_busy_skips
+    }
+
+    pub fn dropped_frames(&self) -> u32 {
+        self.dropped_frames
+    }
+
+    pub fn ble_write_failures(&self) -> u32 {
+        self.ble_write_failures
+    }
+
+    pub fn rate_limit_skips(&self) -> u32 {
+        self.skipped_due_to_rate_limit
+    }
+
+    pub fn duplicate_skips(&self) -> u32 {
+        self.skipped_due_to_duplicate
+    }
+
+    pub fn delta_skips(&self) -> u32 {
+        self.skipped_due_to_delta
+    }
+
     /// Returns true if a sustain notice should be emitted (once until recovery).
-    pub fn check_sustain_notice(&mut self, target_fps: u8, actual_fps: f32) -> bool {
-        if actual_fps >= target_fps as f32 * 0.75 {
+    pub fn check_sustain_notice(&mut self, target_fps: f32, actual_fps: f32) -> bool {
+        if actual_fps >= target_fps * 0.75 {
             self.sustain_low_count = 0;
             self.sustain_notice_sent = false;
             return false;
@@ -192,19 +276,30 @@ impl AmbientMetricsCollector {
         false
     }
 
-    pub fn snapshot(&self, settings: &AmbientSettings) -> AmbientDebugMetrics {
+    pub fn consecutive_capture_failures(&self) -> u32 {
+        self.consecutive_capture_failures
+    }
+
+    pub fn snapshot(
+        &self,
+        _settings: &AmbientSettings,
+        target_capture_fps: f32,
+        target_output_fps: f32,
+        adaptive: Option<&AdaptiveSnapshot>,
+    ) -> AmbientDebugMetrics {
+        let adaptive_enabled = adaptive.is_some();
         AmbientDebugMetrics {
-            capture_fps: compute_fps(&self.sample_times),
-            target_capture_fps: Some(settings.target_capture_fps()),
-            capture_time_ms_avg: self.capture_avg.value(),
+            capture_fps: self.capture_fps(),
+            target_capture_fps: Some(target_capture_fps),
+            capture_time_ms_avg: self.capture_time_avg(),
             capture_time_ms_last: self.capture_last,
             capture_failures: self.capture_failures,
-            processing_time_ms_avg: self.processing_avg.value(),
+            processing_time_ms_avg: self.processing_time_avg(),
             processing_time_ms_last: self.processing_last,
             downsample_time_ms_avg: Some(self.downsample_avg.value()),
             algorithm_time_ms_avg: Some(self.algorithm_avg.value()),
-            target_output_fps: settings.output_fps as f32,
-            actual_output_fps: compute_fps(&self.ble_times),
+            target_output_fps,
+            actual_output_fps: self.actual_output_fps(),
             output_interval_ms_avg: self.output_interval_avg.value(),
             time_since_last_frame_ms: self
                 .last_frame_at
@@ -214,7 +309,7 @@ impl AmbientMetricsCollector {
                 .last_ble_send_at
                 .map(|t| t.elapsed().as_secs_f32() * 1000.0)
                 .unwrap_or(0.0),
-            ble_write_time_ms_avg: self.ble_write_avg.value(),
+            ble_write_time_ms_avg: self.ble_write_time_avg(),
             ble_write_time_ms_last: self.ble_write_last,
             ble_write_failures: self.ble_write_failures,
             ble_writes_in_flight: Some(self.ble_writes_in_flight),
@@ -238,6 +333,25 @@ impl AmbientMetricsCollector {
             black_threshold: None,
             center_contribution: None,
             highlight_influence: None,
+            adaptive_mode_enabled: adaptive_enabled,
+            adaptive_target_fps: adaptive.map(|a| a.target_fps),
+            adaptive_capture_target_fps: adaptive.map(|a| a.capture_target_fps),
+            adaptive_output_target_fps: adaptive.map(|a| a.output_target_fps),
+            adaptive_state: adaptive.map(|a| a.state.as_str().to_string()),
+            adaptive_reason: adaptive.and_then(|a| a.reason.clone()),
+            adaptive_last_adjustment_at: adaptive.and_then(|a| a.last_adjustment_at.clone()),
+            adaptive_frame_budget_ms: adaptive.map(|a| a.frame_budget_ms),
+            adaptive_stability_score: adaptive.map(|a| a.stability_score),
+            consecutive_capture_failures: self.consecutive_capture_failures,
+            capture_timeouts: self.capture_timeouts,
+            stale_capture_discarded: self.stale_capture_discarded,
+            capture_in_flight: self.capture_in_flight,
+            capture_backoff_active: self.capture_backoff_active,
+            last_ambient_stop_reason: self.last_stop_reason.clone(),
+            global_ble_write_in_flight: global_write_in_flight(),
+            global_ble_write_timeout_count: global_write_timeout_count(),
+            global_ble_write_gate_busy_count: global_write_gate_busy_count(),
+            adaptive_recent_ble_failure_delta: adaptive.map(|a| a.recent_ble_failure_delta),
         }
     }
 
@@ -250,8 +364,11 @@ impl AmbientMetricsCollector {
         highlight_intensity: f32,
         smoothed_brightness: u8,
         target_brightness: u8,
+        target_capture_fps: f32,
+        target_output_fps: f32,
+        adaptive: Option<&AdaptiveSnapshot>,
     ) -> AmbientDebugMetrics {
-        let mut m = self.snapshot(settings);
+        let mut m = self.snapshot(settings, target_capture_fps, target_output_fps, adaptive);
         m.edge_intensity = Some(edge_intensity);
         m.center_intensity = Some(center_intensity);
         m.spatial_intensity = Some(spatial_intensity);

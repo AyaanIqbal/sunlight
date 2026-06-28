@@ -20,6 +20,9 @@ pub enum LampError {
     #[error("Failed to send color. The lamp may have disconnected. Try Refresh Bluetooth.")]
     WriteFailure,
 
+    #[error("BLE write gate busy.")]
+    WriteBusy,
+
     #[error("Invalid value: {0}")]
     InvalidValue(String),
 

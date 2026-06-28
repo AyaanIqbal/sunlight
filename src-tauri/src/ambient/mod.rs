@@ -1,3 +1,4 @@
+mod adaptive;
 mod brightness;
 mod capture;
 mod color;

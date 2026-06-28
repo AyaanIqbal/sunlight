@@ -31,6 +31,10 @@ pub struct LampState {
     pub reconnect_attempts: u8,
     pub last_reconnect_at: Option<Instant>,
     pub user_disconnected: bool,
+    /// Bumped when a manual connect/refresh/reconnect takes over from auto-reconnect.
+    pub connect_epoch: u64,
+    pub last_color: Option<(u8, u8, u8, u8)>,
+    pub last_write_at: Option<Instant>,
 }
 
 impl LampState {
@@ -44,6 +48,9 @@ impl LampState {
             reconnect_attempts: 0,
             last_reconnect_at: None,
             user_disconnected: false,
+            connect_epoch: 0,
+            last_color: None,
+            last_write_at: None,
         }
     }
 }

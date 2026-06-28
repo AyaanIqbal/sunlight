@@ -1,10 +1,90 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AmbientOutputRate {
+    Fixed(u8),
+    AdaptiveMax,
+}
+
+impl Default for AmbientOutputRate {
+    fn default() -> Self {
+        Self::Fixed(8)
+    }
+}
+
+impl Serialize for AmbientOutputRate {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Fixed(fps) => serializer.serialize_u8(*fps),
+            Self::AdaptiveMax => serializer.serialize_str("adaptive_max"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AmbientOutputRate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(normalize_output_rate_value(value))
+    }
+}
+
+fn normalize_output_rate_value(value: serde_json::Value) -> AmbientOutputRate {
+    match value {
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .and_then(|v| u8::try_from(v).ok())
+            .map(AmbientOutputRate::Fixed)
+            .unwrap_or_default(),
+        serde_json::Value::String(s) if s == "adaptive_max" => AmbientOutputRate::AdaptiveMax,
+        _ => AmbientOutputRate::default(),
+    }
+}
+
+impl AmbientOutputRate {
+    pub fn is_adaptive_max(&self) -> bool {
+        matches!(self, Self::AdaptiveMax)
+    }
+
+    pub fn as_fixed_fps(&self) -> Option<u8> {
+        match self {
+            Self::Fixed(fps) => Some(*fps),
+            Self::AdaptiveMax => None,
+        }
+    }
+}
+
+pub fn fps_to_interval_ms(fps: u8) -> u64 {
+    1000 / fps.max(1) as u64
+}
+
+pub fn fixed_target_sample_interval_ms(fps: u8) -> u64 {
+    match fps {
+        20 => 40,
+        25 => 33,
+        30 => 30,
+        _ => 55,
+    }
+}
+
+pub fn fixed_output_fps(fps: u8) -> u8 {
+    match fps {
+        4 | 8 | 10 | 12 | 15 | 20 | 25 | 30 => fps,
+        _ => 8,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AmbientSettings {
     pub quality: String,
-    pub output_fps: u8,
+    #[serde(default, deserialize_with = "deserialize_output_rate_field")]
+    pub output_fps: AmbientOutputRate,
     pub edge_priority: String,
     pub saturation_boost: f32,
     pub brightness_boost: f32,
@@ -22,11 +102,22 @@ pub struct AmbientSettings {
     pub highlight_influence: f32,
 }
 
+fn deserialize_output_rate_field<'de, D>(deserializer: D) -> Result<AmbientOutputRate, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(v) => normalize_output_rate_value(v),
+        None => AmbientOutputRate::default(),
+    })
+}
+
 impl Default for AmbientSettings {
     fn default() -> Self {
         Self {
             quality: "balanced".to_string(),
-            output_fps: 8,
+            output_fps: AmbientOutputRate::default(),
             edge_priority: "high".to_string(),
             saturation_boost: 1.4,
             brightness_boost: 1.15,
@@ -71,31 +162,26 @@ impl AmbientSettings {
         }
     }
 
+    pub fn is_adaptive_max(&self) -> bool {
+        self.output_fps.is_adaptive_max()
+    }
+
     pub fn output_interval_ms(&self) -> u64 {
-        let fps = match self.output_fps {
-            4 => 4,
-            10 => 10,
-            12 => 12,
-            15 => 15,
-            20 => 20,
-            25 => 25,
-            30 => 30,
-            _ => 8,
-        };
-        1000 / fps as u64
+        let fps = fixed_output_fps(self.output_fps.as_fixed_fps().unwrap_or(8));
+        fps_to_interval_ms(fps)
     }
 
     pub fn target_sample_interval_ms(&self) -> u64 {
-        match self.output_fps {
-            20 => 40,
-            25 => 33,
-            30 => 30,
-            _ => 55,
-        }
+        let fps = fixed_output_fps(self.output_fps.as_fixed_fps().unwrap_or(8));
+        fixed_target_sample_interval_ms(fps)
     }
 
     pub fn target_capture_fps(&self) -> f32 {
         1000.0 / self.target_sample_interval_ms() as f32
+    }
+
+    pub fn target_output_fps(&self) -> f32 {
+        fixed_output_fps(self.output_fps.as_fixed_fps().unwrap_or(8)) as f32
     }
 
     pub fn is_dynamic_brightness(&self) -> bool {
@@ -185,6 +271,55 @@ pub struct AmbientDebugMetrics {
     pub center_contribution: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub highlight_influence: Option<f32>,
+    pub adaptive_mode_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_target_fps: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_capture_target_fps: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_output_target_fps: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_last_adjustment_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_frame_budget_ms: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_stability_score: Option<f32>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub consecutive_capture_failures: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub capture_timeouts: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub stale_capture_discarded: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub capture_in_flight: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub capture_backoff_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ambient_stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub global_ble_write_in_flight: u8,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub global_ble_write_timeout_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub global_ble_write_gate_busy_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_recent_ble_failure_delta: Option<u32>,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
