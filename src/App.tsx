@@ -4,6 +4,9 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { Settings } from "lucide-react";
 import type {
+  AmbientFrameEvent,
+  AmbientSettings,
+  AmbientStatus,
   AppState,
   ConnectionStatus,
   LampLoop,
@@ -12,6 +15,7 @@ import type {
   PresetSection,
   WorkspaceTab,
 } from "./types";
+import { DEFAULT_AMBIENT_SETTINGS } from "./types";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { ColorControlPanel } from "./components/ColorControlPanel";
 import { RightWorkspacePanel } from "./components/RightWorkspacePanel";
@@ -39,7 +43,17 @@ import {
   getActiveLoopId,
 } from "./loopRunner";
 import {
+  initAmbientRunner,
+  isAmbientRunning,
+  startAmbient,
+  stopAmbient,
+  syncAmbientStatus,
+  updateAmbientSettings,
+  teardownAmbientRunner,
+} from "./ambientRunner";
+import {
   buildExportBundle,
+  ensureJsonExtension,
   getDefaultExportFilename,
   parseImportJson,
 } from "./exportImport";
@@ -69,6 +83,10 @@ export default function App() {
   const [activeLoopId, setActiveLoopId] = useState<string | null>(null);
   const [runningLoopId, setRunningLoopId] = useState<string | null>(null);
   const [runningLoopName, setRunningLoopName] = useState<string | null>(null);
+  const [ambientSettings, setAmbientSettings] = useState<AmbientSettings>(DEFAULT_AMBIENT_SETTINGS);
+  const [ambientStatus, setAmbientStatus] = useState<AmbientStatus>("inactive");
+  const [ambientMetrics, setAmbientMetrics] = useState<AmbientFrameEvent | null>(null);
+  const [ambientBrightness, setAmbientBrightness] = useState<number | null>(null);
   const [saveCurrentModal, setSaveCurrentModal] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState>(null);
@@ -81,6 +99,9 @@ export default function App() {
   const statusRef = useRef(status);
   const autoConnectRef = useRef(autoConnect);
   const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ambientUpdatingRef = useRef(false);
+  const ambientSettingsRef = useRef(ambientSettings);
+  const brightnessRef = useRef(brightness);
 
   useEffect(() => {
     colorRef.current = { r, g, b, brightness };
@@ -97,6 +118,20 @@ export default function App() {
   useEffect(() => {
     autoConnectRef.current = autoConnect;
   }, [autoConnect]);
+
+  useEffect(() => {
+    ambientSettingsRef.current = ambientSettings;
+  }, [ambientSettings]);
+
+  useEffect(() => {
+    brightnessRef.current = brightness;
+    if (
+      isAmbientRunning() &&
+      ambientSettingsRef.current.brightnessMode === "manual"
+    ) {
+      updateAmbientSettings(ambientSettingsRef.current, brightness);
+    }
+  }, [brightness]);
 
   useEffect(() => {
     initConnectionManager({
@@ -127,11 +162,75 @@ export default function App() {
       },
       getConnected: () => statusRef.current === "connected",
     });
+
+    initAmbientRunner({
+      onColorChange: (color) => {
+        ambientUpdatingRef.current = true;
+        setR(color.r);
+        setG(color.g);
+        setB(color.b);
+        setActivePresetId(null);
+        setActiveLoopId(null);
+        requestAnimationFrame(() => {
+          ambientUpdatingRef.current = false;
+        });
+      },
+      onStatusChange: setAmbientStatus,
+      onFrameMetrics: (frame) => {
+        setAmbientMetrics(frame);
+        if (frame.computedBrightness != null) {
+          setAmbientBrightness(frame.computedBrightness);
+        }
+      },
+      capturePreAmbientState: () => ({
+        r: colorRef.current.r,
+        g: colorRef.current.g,
+        b: colorRef.current.b,
+        brightness: colorRef.current.brightness,
+      }),
+      onRestorePreAmbient: (state) => {
+        setR(state.r);
+        setG(state.g);
+        setB(state.b);
+        setBrightness(state.brightness);
+        setAmbientBrightness(null);
+        if (statusRef.current === "connected") {
+          void safeSetColor(state.r, state.g, state.b, state.brightness);
+        }
+      },
+      onStopped: (reason, message) => {
+        setAmbientBrightness(null);
+        if (reason === "connection_lost") {
+          showToast(
+            message ??
+              "Ambient Mode stopped because the lamp connection became stale.",
+            "error"
+          );
+        } else if (reason === "capture_failed") {
+          showToast(
+            message ??
+              "Could not capture the screen. Check Screen Recording permission and try again.",
+            "error"
+          );
+        } else if (reason === "permission") {
+          showToast(message ?? "Screen Recording permission is required.", "error");
+        }
+      },
+      onNotice: (message) => showToast(message),
+      getConnected: () => statusRef.current === "connected",
+    });
+
+    void syncAmbientStatus();
   }, [showToast]);
 
   useEffect(() => {
-    if (status !== "connected" && getActiveLoopId()) {
-      stopLoop(status === "disconnected" ? "disconnect" : "connection_lost");
+    if (status !== "connected") {
+      if (getActiveLoopId()) {
+        stopLoop(status === "disconnected" ? "disconnect" : "connection_lost");
+      }
+      if (isAmbientRunning()) {
+        void stopAmbient(status === "disconnected" ? "disconnect" : "connection_lost");
+      }
     }
   }, [status]);
 
@@ -139,6 +238,9 @@ export default function App() {
     if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
     resumeTimerRef.current = setTimeout(() => {
       void verifyOnResume();
+      if (isAmbientRunning()) {
+        void syncAmbientStatus();
+      }
     }, 500);
   }, []);
 
@@ -161,6 +263,8 @@ export default function App() {
       unlistenFocus?.();
       if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
       stopLoop("user");
+      void stopAmbient("user");
+      teardownAmbientRunner();
     };
   }, [scheduleVerifyOnResume]);
 
@@ -176,7 +280,8 @@ export default function App() {
         setAutoConnect(state.settings.autoConnect);
         setTransitionEnabled(state.settings.transitionEnabled ?? true);
         setTransitionDurationMs(state.settings.transitionDurationMs ?? 1200);
-        setWorkspace("presets");
+        setAmbientSettings(state.settings.ambient ?? DEFAULT_AMBIENT_SETTINGS);
+        setWorkspace(state.settings.activeWorkspace ?? "presets");
         setPresets(state.presets);
         setSections(state.sections);
         setLoops(state.loops);
@@ -194,7 +299,8 @@ export default function App() {
         }
       } else {
         const fresh = createFreshAppState();
-        setWorkspace("presets");
+        setWorkspace(fresh.settings.activeWorkspace ?? "presets");
+        setAmbientSettings(fresh.settings.ambient ?? DEFAULT_AMBIENT_SETTINGS);
         setPresets(fresh.presets);
         setSections(fresh.sections);
         setLoops(fresh.loops);
@@ -217,6 +323,7 @@ export default function App() {
           transitionEnabled,
           transitionDurationMs,
           activeWorkspace: workspace,
+          ambient: ambientSettings,
           lastColor: { r, g, b, brightness },
         },
         sections,
@@ -233,6 +340,7 @@ export default function App() {
     transitionEnabled,
     transitionDurationMs,
     workspace,
+    ambientSettings,
     r,
     g,
     b,
@@ -248,6 +356,14 @@ export default function App() {
   }, [doPersist]);
 
   const handleColorChange = (nr: number, ng: number, nb: number, nbr: number) => {
+    if (ambientUpdatingRef.current) {
+      setR(nr);
+      setG(ng);
+      setB(nb);
+      setBrightness(nbr);
+      return;
+    }
+    if (isAmbientRunning()) void stopAmbient("manual_color");
     if (getActiveLoopId()) stopLoop("manual_color");
     cancelTransition();
     setR(nr);
@@ -258,7 +374,8 @@ export default function App() {
     setActiveLoopId(null);
   };
 
-  const handleActivatePreset = (preset: LampPreset) => {
+  const handleActivatePreset = async (preset: LampPreset) => {
+    if (isAmbientRunning()) await stopAmbient("preset");
     if (getActiveLoopId()) stopLoop("preset");
     cancelTransition();
     setActivePresetId(preset.id);
@@ -298,8 +415,9 @@ export default function App() {
     if (connected) void safeSetColor(to.r, to.g, to.b, to.brightness);
   };
 
-  const handleRunLoop = (loop: LampLoop) => {
+  const handleRunLoop = async (loop: LampLoop) => {
     if (getActiveLoopId() === loop.id) return;
+    if (isAmbientRunning()) await stopAmbient("loop");
     cancelTransition();
     setActivePresetId(null);
     const result = startLoop(loop);
@@ -349,7 +467,35 @@ export default function App() {
     setSaveCurrentModal(false);
   };
 
+  const handleStartAmbient = async () => {
+    if (isAmbientRunning()) return;
+    if (getActiveLoopId()) stopLoop("ambient");
+    cancelTransition();
+    setActivePresetId(null);
+    setActiveLoopId(null);
+    const result = await startAmbient(ambientSettingsRef.current, brightnessRef.current);
+    if (!result.ok) {
+      showToast(result.error, "error");
+      return;
+    }
+    showToast("Ambient Mode started.");
+  };
+
+  const handleStopAmbient = async () => {
+    await stopAmbient("user");
+    showToast("Ambient Mode stopped.");
+  };
+
+  const handleAmbientSettingsChange = (next: AmbientSettings) => {
+    setAmbientSettings(next);
+    if (isAmbientRunning()) {
+      const b = next.brightnessMode === "manual" ? brightnessRef.current : undefined;
+      updateAmbientSettings(next, b);
+    }
+  };
+
   const applyImportedState = (data: AppState) => {
+    void stopAmbient("import");
     stopLoop("import");
     setR(data.settings.lastColor.r);
     setG(data.settings.lastColor.g);
@@ -359,6 +505,7 @@ export default function App() {
     setAutoConnect(data.settings.autoConnect);
     setTransitionEnabled(data.settings.transitionEnabled);
     setTransitionDurationMs(data.settings.transitionDurationMs);
+    setAmbientSettings(data.settings.ambient ?? DEFAULT_AMBIENT_SETTINGS);
     setWorkspace(data.settings.activeWorkspace ?? "presets");
     setPresets(data.presets);
     setSections(data.sections);
@@ -380,6 +527,7 @@ export default function App() {
           transitionEnabled,
           transitionDurationMs,
           activeWorkspace: workspace,
+          ambient: ambientSettings,
           lastColor: { r, g, b, brightness },
         },
         sections,
@@ -389,13 +537,16 @@ export default function App() {
       };
       const bundle = buildExportBundle(state);
       const path = await save({
+        title: "Export Configuration",
         defaultPath: getDefaultExportFilename(),
-        filters: [{ name: "JSON", extensions: ["json"] }],
+        filters: [{ name: "JSON backup", extensions: ["json"] }],
       });
       if (!path) return;
-      await writeTextFile(path, JSON.stringify(bundle, null, 2));
+      const exportPath = ensureJsonExtension(path);
+      await writeTextFile(exportPath, JSON.stringify(bundle, null, 2));
       showToast("Configuration exported successfully.");
-    } catch {
+    } catch (e) {
+      console.error("Export failed:", e);
       showToast("Failed to export configuration.", "error");
     }
   };
@@ -444,6 +595,9 @@ export default function App() {
             <span className="text-[10px] text-[#60a5fa] hidden sm:inline">
               ↺ {runningLoopName}
             </span>
+          )}
+          {isAmbientRunning() && !runningLoopName && (
+            <span className="text-[10px] text-[#34d399] hidden sm:inline">◉ Ambient</span>
           )}
         </div>
 
@@ -511,6 +665,17 @@ export default function App() {
               </button>
             </div>
           )}
+          {isAmbientRunning() && !runningLoopName && (
+            <div className="rounded-xl border border-[#34d399]/30 bg-[#34d399]/5 px-3 py-2 flex items-center justify-between">
+              <span className="text-[11px] text-[#34d399] truncate">Ambient Mode active</span>
+              <button
+                onClick={handleStopAmbient}
+                className="text-[10px] font-medium text-[#f87171] hover:underline flex-shrink-0 ml-2"
+              >
+                Stop
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 min-w-0 p-4 overflow-hidden flex flex-col">
@@ -525,6 +690,15 @@ export default function App() {
             activeLoopId={activeLoopId}
             runningLoopId={runningLoopId}
             runningLoopName={runningLoopName}
+            ambientRunning={isAmbientRunning()}
+            ambientStatus={ambientStatus}
+            ambientSettings={ambientSettings}
+            onAmbientSettingsChange={handleAmbientSettingsChange}
+            ambientMetrics={ambientMetrics}
+            ambientBrightness={ambientBrightness}
+            manualBrightness={brightness}
+            onStartAmbient={() => void handleStartAmbient()}
+            onStopAmbient={handleStopAmbient}
             currentR={r}
             currentG={g}
             currentB={b}
@@ -598,6 +772,7 @@ export default function App() {
         confirmLabel="Reset"
         danger
         onConfirm={() => {
+          void stopAmbient("reset");
           stopLoop("reset");
           const { presets: defaultPresets, sections: defaultSections } = seedDefaults();
           const { loops: defaultLoops, loopSections: defaultLoopSections } = seedLoopDefaults();
@@ -605,6 +780,7 @@ export default function App() {
           setSections(defaultSections);
           setLoops(defaultLoops);
           setLoopSections(defaultLoopSections);
+          setAmbientSettings(DEFAULT_AMBIENT_SETTINGS);
           setActivePresetId(null);
           setActiveLoopId(null);
           setWorkspace("presets");
