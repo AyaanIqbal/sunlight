@@ -1,4 +1,4 @@
-# Sunset Lamp Controller
+# Sunlight - BLE Lamp Controller
 
 A native macOS desktop app for controlling Bluetooth sunset lamps over the iStrip-compatible BLE protocol. Connect to your lamp, pick colors in real time, save presets, and build multi-step lighting loops — no Docker, Home Assistant, or browser dashboard required.
 
