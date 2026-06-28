@@ -1,11 +1,11 @@
 use super::types::ScreenCapturePermission;
 
-const BUNDLE_ID: &str = "com.rawsabsaid.sunset-lamp-controller";
+const BUNDLE_ID: &str = "com.rawsabsaid.sunlight";
 
 pub fn screen_capture_denied_message() -> String {
     format!(
         "Ambient Mode needs Screen Recording permission to sample display colors. \
-         In System Settings → Privacy & Security → Screen Recording, enable \"Sunset Lamp Controller\" \
+         In System Settings → Privacy & Security → Screen Recording, enable \"Sunlight\" \
          (bundle id: {BUNDLE_ID}). If you already enabled it, quit and reopen the app — \
          macOS only applies the grant after a restart."
     )

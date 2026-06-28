@@ -11,7 +11,7 @@ if [[ "$PROFILE" != "release" && "$PROFILE" != "debug" ]]; then
   exit 1
 fi
 
-APP="$ROOT/src-tauri/target/$PROFILE/bundle/macos/Sunset Lamp Controller.app"
+APP="$ROOT/src-tauri/target/$PROFILE/bundle/macos/Sunlight.app"
 
 if [[ ! -d "$APP" ]]; then
   echo "App not found. Building ($PROFILE)..."

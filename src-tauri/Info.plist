@@ -5,10 +5,10 @@
     <key>CFBundleIconName</key>
     <string>Sunlight</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>Sunset Lamp Controller uses Bluetooth to connect to and control your sunset lamp.</string>
+    <string>Sunlight uses Bluetooth to connect to and control your sunset lamp.</string>
     <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>Sunset Lamp Controller uses Bluetooth to connect to and control your sunset lamp.</string>
+    <string>Sunlight uses Bluetooth to connect to and control your sunset lamp.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Sunset Lamp Controller uses Screen Recording permission to sample display colors for Ambient Mode. Frames are processed locally and are not saved.</string>
+    <string>Sunlight uses Screen Recording permission to sample display colors for Ambient Mode. Frames are processed locally and are not saved.</string>
 </dict>
 </plist>

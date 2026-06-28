@@ -608,7 +608,7 @@ export default function App() {
       <div className="flex items-center justify-between px-5 py-3 border-b border-[#1e1e24] flex-shrink-0">
         <div className="flex items-center gap-2">
           <div className="h-2.5 w-2.5 rounded-full bg-[#ff8040]" />
-          <h1 className="text-sm font-semibold text-[#f0f0f4]">Sunset Lamp Controller</h1>
+          <h1 className="text-sm font-semibold text-[#f0f0f4]">Sunlight</h1>
           {runningLoopName && (
             <span className="text-[10px] text-[#60a5fa] hidden sm:inline">
               ↺ {runningLoopName}

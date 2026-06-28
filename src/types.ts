@@ -252,7 +252,7 @@ export interface AppState {
 export interface ExportBundle {
   schemaVersion: 2;
   exportedAt: string;
-  app: "Sunset Lamp Controller";
+  app: "Sunlight";
   settings: AppSettings;
   sections: PresetSection[];
   presets: LampPreset[];

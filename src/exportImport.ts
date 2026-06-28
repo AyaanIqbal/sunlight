@@ -21,7 +21,8 @@ import {
 import { seedDefaults } from "./presets";
 import { seedLoopDefaults } from "./loops";
 
-const APP_NAME = "Sunset Lamp Controller" as const;
+const APP_NAME = "Sunlight" as const;
+const LEGACY_APP_NAME = "Sunset Lamp Controller" as const;
 export const EXPORT_SCHEMA_VERSION = 2;
 
 export function buildExportBundle(state: AppState): ExportBundle {
@@ -351,8 +352,8 @@ export function validateImportBundle(
     return { ok: false, error: "Unsupported backup version. Expected schemaVersion 1 or 2." };
   }
 
-  if (raw.app !== APP_NAME) {
-    return { ok: false, error: "This file does not appear to be a Sunset Lamp Controller backup." };
+  if (raw.app !== APP_NAME && raw.app !== LEGACY_APP_NAME) {
+    return { ok: false, error: "This file does not appear to be a Sunlight backup." };
   }
 
   const settings = parseSettings(raw.settings);
@@ -437,7 +438,7 @@ export function parseImportJson(
 
 export function getDefaultExportFilename(): string {
   const date = new Date().toISOString().slice(0, 10);
-  return `sunset-lamp-backup-${date}.json`;
+  return `sunlight-backup-${date}.json`;
 }
 
 export function ensureJsonExtension(path: string): string {

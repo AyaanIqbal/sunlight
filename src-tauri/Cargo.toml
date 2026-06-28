@@ -1,12 +1,12 @@
 [package]
-name = "sunset-lamp-controller"
+name = "sunlight"
 version = "0.1.0"
-description = "Sunset Lamp Controller"
+description = "Sunlight"
 authors = ["rawsabsaid"]
 edition = "2021"
 
 [lib]
-name = "sunset_lamp_controller_lib"
+name = "sunlight_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
