@@ -7,14 +7,21 @@ export interface ColorState {
   brightness: number;
 }
 
+const TRANSITION_SEND_INTERVAL_MS = 45;
+
 let rafId: number | null = null;
 
-function easeOutQuad(t: number): number {
-  return 1 - (1 - t) * (1 - t);
+/** Smooth S-curve — gentle start and end, best for color fades. */
+function easeInOutSine(t: number): number {
+  return -(Math.cos(Math.PI * t) - 1) / 2;
 }
 
 function lerp(from: number, to: number, t: number): number {
   return Math.round(from + (to - from) * t);
+}
+
+function colorsEqual(a: ColorState, b: ColorState): boolean {
+  return a.r === b.r && a.g === b.g && a.b === b.b && a.brightness === b.brightness;
 }
 
 export function cancelTransition(): void {
@@ -36,11 +43,20 @@ export function animateColorTransition(
   const sendToLamp = options?.sendToLamp ?? true;
   const onComplete = options?.onComplete;
   const start = performance.now();
+  let lastSent: ColorState | null = null;
+
+  const sendIfChanged = (color: ColorState, force = false) => {
+    if (!sendToLamp) return;
+    if (force || !lastSent || !colorsEqual(lastSent, color)) {
+      lastSent = color;
+      throttledSetColor(color.r, color.g, color.b, color.brightness, TRANSITION_SEND_INTERVAL_MS);
+    }
+  };
 
   const tick = (now: number) => {
     const elapsed = now - start;
     const rawT = durationMs <= 0 ? 1 : Math.min(elapsed / durationMs, 1);
-    const t = easeOutQuad(rawT);
+    const t = easeInOutSine(rawT);
 
     const color: ColorState = {
       r: lerp(from.r, to.r, t),
@@ -50,19 +66,14 @@ export function animateColorTransition(
     };
 
     onStep(color);
-
-    if (sendToLamp) {
-      throttledSetColor(color.r, color.g, color.b, color.brightness);
-    }
+    sendIfChanged(color);
 
     if (rawT < 1) {
       rafId = requestAnimationFrame(tick);
     } else {
       rafId = null;
       onStep(to);
-      if (sendToLamp) {
-        throttledSetColor(to.r, to.g, to.b, to.brightness);
-      }
+      sendIfChanged(to, true);
       onComplete?.();
     }
   };

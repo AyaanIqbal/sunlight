@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import type { LampPreset, PresetSection } from "../types";
 import { clamp, defaultGradient, rgbToHex } from "../colorUtils";
+import { SelectField } from "./SelectField";
+import { Modal } from "./Modal";
 import { v4 as uuidv4 } from "uuid";
 
 interface PresetEditorModalProps {
+  open: boolean;
   preset?: LampPreset;
   sections: PresetSection[];
   defaultSectionId: string;
@@ -51,6 +54,7 @@ function ColorInput({
 }
 
 export function PresetEditorModal({
+  open,
   preset,
   sections,
   defaultSectionId,
@@ -79,6 +83,26 @@ export function PresetEditorModal({
   const [borderColor, setBorderColor] = useState(initGradient.borderColor);
   const [mainColor, setMainColor] = useState(initGradient.mainColor);
   const [middleColor, setMiddleColor] = useState(initGradient.middleColor);
+
+  // Reset form when modal opens
+  useEffect(() => {
+    if (!open) return;
+    setName(preset?.name ?? "");
+    setR(preset?.r ?? currentR);
+    setG(preset?.g ?? currentG);
+    setB(preset?.b ?? currentB);
+    setBrightness(preset?.brightness ?? currentBrightness);
+    setSectionId(preset ? "" : defaultSectionId);
+    setNotes(preset?.notes ?? "");
+    const gradient = preset?.gradient ?? defaultGradient(
+      preset?.r ?? currentR,
+      preset?.g ?? currentG,
+      preset?.b ?? currentB
+    );
+    setBorderColor(gradient.borderColor);
+    setMainColor(gradient.mainColor);
+    setMiddleColor(gradient.middleColor);
+  }, [open, preset, currentR, currentG, currentB, currentBrightness, defaultSectionId]);
 
   // Find which section contains this preset
   useEffect(() => {
@@ -117,15 +141,11 @@ export function PresetEditorModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      onClick={onCancel}
+    <Modal
+      open={open}
+      onClose={onCancel}
+      panelClassName="w-[440px] rounded-xl border border-[#2e2e38] bg-[#1e1e24] shadow-2xl"
     >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div
-        className="relative z-10 w-[440px] max-h-[90vh] overflow-y-auto rounded-xl border border-[#2e2e38] bg-[#1e1e24] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#2e2e38]">
           <h2 className="text-sm font-semibold text-[#f0f0f4]">
             {isEdit ? "Edit Preset" : "New Preset"}
@@ -189,18 +209,12 @@ export function PresetEditorModal({
           </div>
 
           {/* Section */}
-          <div>
-            <label className="block text-[11px] font-medium text-[#9090a0] mb-1">Section</label>
-            <select
-              value={sectionId}
-              onChange={(e) => setSectionId(e.target.value)}
-              className="w-full rounded-lg bg-[#111114] border border-[#2e2e38] px-2 py-1.5 text-sm text-[#f0f0f4] focus:outline-none focus:border-[#ff8040]/50"
-            >
-              {sections.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
+          <SelectField
+            label="Section"
+            value={sectionId}
+            onChange={setSectionId}
+            options={sections.map((s) => ({ value: s.id, label: s.name }))}
+          />
 
           {/* Gradient colors */}
           <div>
@@ -248,7 +262,6 @@ export function PresetEditorModal({
             {isEdit ? "Save Changes" : "Create Preset"}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -21,7 +21,7 @@ export default function App() {
   const [liveUpdate, setLiveUpdate] = useState(true);
   const [autoConnect, setAutoConnect] = useState(false);
   const [transitionEnabled, setTransitionEnabled] = useState(true);
-  const [transitionDurationMs, setTransitionDurationMs] = useState(800);
+  const [transitionDurationMs, setTransitionDurationMs] = useState(1200);
   const [presets, setPresets] = useState<LampPreset[]>([]);
   const [sections, setSections] = useState<PresetSection[]>([]);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
@@ -58,7 +58,7 @@ export default function App() {
         setLiveUpdate(state.settings.liveUpdate);
         setAutoConnect(state.settings.autoConnect);
         setTransitionEnabled(state.settings.transitionEnabled ?? true);
-        setTransitionDurationMs(state.settings.transitionDurationMs ?? 800);
+        setTransitionDurationMs(state.settings.transitionDurationMs ?? 1200);
         setPresets(state.presets);
         setSections(state.sections);
 
@@ -277,31 +277,28 @@ export default function App() {
       </div>
 
       {/* Save current as preset modal */}
-      {saveCurrentModal && (
-        <PresetEditorModal
-          sections={sections}
-          defaultSectionId={sections[0]?.id ?? ""}
-          currentR={r}
-          currentG={g}
-          currentB={b}
-          currentBrightness={brightness}
-          onSave={handleSavePreset}
-          onCancel={() => setSaveCurrentModal(false)}
-        />
-      )}
+      <PresetEditorModal
+        open={saveCurrentModal}
+        sections={sections}
+        defaultSectionId={sections[0]?.id ?? ""}
+        currentR={r}
+        currentG={g}
+        currentB={b}
+        currentBrightness={brightness}
+        onSave={handleSavePreset}
+        onCancel={() => setSaveCurrentModal(false)}
+      />
 
-      {/* Settings modal */}
-      {settingsOpen && (
-        <SettingsModal
-          autoConnect={autoConnect}
-          onAutoConnectChange={setAutoConnect}
-          transitionEnabled={transitionEnabled}
-          onTransitionEnabledChange={setTransitionEnabled}
-          transitionDurationMs={transitionDurationMs}
-          onTransitionDurationChange={setTransitionDurationMs}
-          onClose={() => setSettingsOpen(false)}
-        />
-      )}
+      <SettingsModal
+        open={settingsOpen}
+        autoConnect={autoConnect}
+        onAutoConnectChange={setAutoConnect}
+        transitionEnabled={transitionEnabled}
+        onTransitionEnabledChange={setTransitionEnabled}
+        transitionDurationMs={transitionDurationMs}
+        onTransitionDurationChange={setTransitionDurationMs}
+        onClose={() => setSettingsOpen(false)}
+      />
     </div>
   );
 }

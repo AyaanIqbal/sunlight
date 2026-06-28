@@ -1,6 +1,8 @@
 import { X } from "lucide-react";
+import { Modal } from "./Modal";
 
 interface SettingsModalProps {
+  open: boolean;
   autoConnect: boolean;
   onAutoConnectChange: (v: boolean) => void;
   transitionEnabled: boolean;
@@ -34,13 +36,14 @@ function Toggle({
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className={`relative h-5 w-9 flex-shrink-0 rounded-full transition-colors ${
+        className={`relative h-6 w-11 flex-shrink-0 rounded-full transition-colors duration-200 ease-in-out ${
           checked ? "bg-[#ff8040]/80" : "bg-[#2e2e38]"
         }`}
       >
         <span
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-            checked ? "translate-x-4" : "translate-x-0.5"
+          aria-hidden="true"
+          className={`absolute top-0.5 left-0.5 block h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ease-in-out ${
+            checked ? "translate-x-5" : "translate-x-0"
           }`}
         />
       </button>
@@ -49,6 +52,7 @@ function Toggle({
 }
 
 export function SettingsModal({
+  open,
   autoConnect,
   onAutoConnectChange,
   transitionEnabled,
@@ -58,15 +62,7 @@ export function SettingsModal({
   onClose,
 }: SettingsModalProps) {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      onClick={onClose}
-    >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div
-        className="relative z-10 w-[400px] rounded-xl border border-[#2e2e38] bg-[#1e1e24] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal open={open} onClose={onClose} panelClassName="w-[400px] rounded-xl border border-[#2e2e38] bg-[#1e1e24] shadow-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#2e2e38]">
           <h2 className="text-sm font-semibold text-[#f0f0f4]">Settings</h2>
           <button
@@ -132,7 +128,6 @@ export function SettingsModal({
             Done
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

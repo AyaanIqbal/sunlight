@@ -85,18 +85,22 @@ export function ColorControlPanel({
           </div>
 
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
-            <div
-              className={`relative h-4 w-7 rounded-full transition-colors ${
+            <button
+              type="button"
+              role="switch"
+              aria-checked={liveUpdate}
+              onClick={() => onLiveUpdateChange(!liveUpdate)}
+              className={`relative h-5 w-9 flex-shrink-0 rounded-full transition-colors duration-200 ease-in-out ${
                 liveUpdate ? "bg-[#ff8040]/80" : "bg-[#2e2e38]"
               }`}
-              onClick={() => onLiveUpdateChange(!liveUpdate)}
             >
               <span
-                className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform ${
-                  liveUpdate ? "translate-x-3.5" : "translate-x-0.5"
+                aria-hidden="true"
+                className={`absolute top-0.5 left-0.5 block h-4 w-4 rounded-full bg-white shadow transition-transform duration-200 ease-in-out ${
+                  liveUpdate ? "translate-x-4" : "translate-x-0"
                 }`}
               />
-            </div>
+            </button>
             <span className="text-[11px] text-[#9090a0]">Live</span>
           </label>
         </div>

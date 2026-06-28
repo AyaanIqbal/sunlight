@@ -301,65 +301,73 @@ export function PresetPanel({
       )}
 
       {/* Modals */}
-      {modal?.type === "newPreset" && (
-        <PresetEditorModal
-          sections={sections}
-          defaultSectionId={defaultSectionId}
-          currentR={currentR}
-          currentG={currentG}
-          currentB={currentB}
-          currentBrightness={currentBrightness}
-          onSave={handleSavePreset}
-          onCancel={() => setModal(null)}
-        />
-      )}
+      <PresetEditorModal
+        open={modal?.type === "newPreset"}
+        sections={sections}
+        defaultSectionId={defaultSectionId}
+        currentR={currentR}
+        currentG={currentG}
+        currentB={currentB}
+        currentBrightness={currentBrightness}
+        onSave={handleSavePreset}
+        onCancel={() => setModal(null)}
+      />
 
-      {modal?.type === "editPreset" && (
-        <PresetEditorModal
-          preset={modal.preset}
-          sections={sections}
-          defaultSectionId={defaultSectionId}
-          onSave={handleSavePreset}
-          onCancel={() => setModal(null)}
-        />
-      )}
+      <PresetEditorModal
+        open={modal?.type === "editPreset"}
+        preset={modal?.type === "editPreset" ? modal.preset : undefined}
+        sections={sections}
+        defaultSectionId={defaultSectionId}
+        onSave={handleSavePreset}
+        onCancel={() => setModal(null)}
+      />
 
-      {modal?.type === "newSection" && (
-        <SectionEditorModal
-          onSave={handleCreateSection}
-          onCancel={() => setModal(null)}
-        />
-      )}
+      <SectionEditorModal
+        open={modal?.type === "newSection"}
+        onSave={handleCreateSection}
+        onCancel={() => setModal(null)}
+      />
 
-      {modal?.type === "renameSection" && (
-        <SectionEditorModal
-          initialName={modal.section.name}
-          onSave={(name) => handleRenameSection(modal.section, name)}
-          onCancel={() => setModal(null)}
-        />
-      )}
+      <SectionEditorModal
+        open={modal?.type === "renameSection"}
+        initialName={modal?.type === "renameSection" ? modal.section.name : ""}
+        onSave={(name) => {
+          if (modal?.type === "renameSection") handleRenameSection(modal.section, name);
+        }}
+        onCancel={() => setModal(null)}
+      />
 
-      {modal?.type === "deletePreset" && (
-        <ConfirmDialog
-          title={`Delete "${modal.preset.name}"?`}
-          message="This cannot be undone."
-          confirmLabel="Delete"
-          danger
-          onConfirm={() => handleDeletePreset(modal.preset)}
-          onCancel={() => setModal(null)}
-        />
-      )}
+      <ConfirmDialog
+        open={modal?.type === "deletePreset"}
+        title={
+          modal?.type === "deletePreset" ? `Delete "${modal.preset.name}"?` : ""
+        }
+        message="This cannot be undone."
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => {
+          if (modal?.type === "deletePreset") handleDeletePreset(modal.preset);
+        }}
+        onCancel={() => setModal(null)}
+      />
 
-      {modal?.type === "deleteSection" && (
-        <ConfirmDialog
-          title={`Delete section "${modal.section.name}"?`}
-          message={`The ${modal.section.presetIds.length} preset(s) inside will be moved to the next available section.`}
-          confirmLabel="Delete Section"
-          danger
-          onConfirm={() => handleDeleteSection(modal.section)}
-          onCancel={() => setModal(null)}
-        />
-      )}
+      <ConfirmDialog
+        open={modal?.type === "deleteSection"}
+        title={
+          modal?.type === "deleteSection" ? `Delete section "${modal.section.name}"?` : ""
+        }
+        message={
+          modal?.type === "deleteSection"
+            ? `The ${modal.section.presetIds.length} preset(s) inside will be moved to the next available section.`
+            : ""
+        }
+        confirmLabel="Delete Section"
+        danger
+        onConfirm={() => {
+          if (modal?.type === "deleteSection") handleDeleteSection(modal.section);
+        }}
+        onCancel={() => setModal(null)}
+      />
     </div>
   );
 }

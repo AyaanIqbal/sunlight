@@ -143,7 +143,7 @@ export function ConnectionPanel({
               <button
                 onClick={handleDisconnect}
                 disabled={busy}
-                className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium text-[#f87171] hover:bg-red-500/10 disabled:opacity-50 transition-colors"
+                className="flex items-center gap-1 rounded-lg bg-red-500/15 px-2.5 py-1 text-xs font-medium text-[#f87171] hover:bg-red-500/25 disabled:opacity-50 transition-colors"
               >
                 Disconnect
               </button>

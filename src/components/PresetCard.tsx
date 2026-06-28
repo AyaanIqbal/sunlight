@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pencil, Trash2, GripVertical } from "lucide-react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -21,9 +21,14 @@ interface MenuPos {
 
 export function PresetCard({ preset, active, onActivate, onEdit, onDelete }: PresetCardProps) {
   const [menuPos, setMenuPos] = useState<MenuPos | null>(null);
+  const justDraggedRef = useRef(false);
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: preset.id });
+
+  useEffect(() => {
+    if (isDragging) justDraggedRef.current = true;
+  }, [isDragging]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -32,6 +37,14 @@ export function PresetCard({ preset, active, onActivate, onEdit, onDelete }: Pre
   };
 
   const hex = rgbToHex(preset.r, preset.g, preset.b);
+
+  const handleClick = () => {
+    if (justDraggedRef.current) {
+      justDraggedRef.current = false;
+      return;
+    }
+    onActivate();
+  };
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -46,12 +59,14 @@ export function PresetCard({ preset, active, onActivate, onEdit, onDelete }: Pre
       <div
         ref={setNodeRef}
         style={style}
-        className={`group relative rounded-lg border transition-all cursor-pointer overflow-hidden ${
+        {...attributes}
+        {...listeners}
+        className={`group relative rounded-lg border transition-all cursor-grab active:cursor-grabbing overflow-hidden ${
           active
             ? "border-[#ff8040]/60 bg-[#ff8040]/5"
             : "border-[#2e2e38] bg-[#202028] hover:border-[#3e3e4e] hover:bg-[#252530]"
         }`}
-        onClick={onActivate}
+        onClick={handleClick}
         onContextMenu={handleContextMenu}
       >
         {/* Gradient strip — expands in on hover/active, collapses to nothing otherwise */}
@@ -63,13 +78,8 @@ export function PresetCard({ preset, active, onActivate, onEdit, onDelete }: Pre
         />
 
         <div className="px-3 py-2.5 flex items-center gap-2">
-          {/* Drag handle */}
-          <div
-            {...attributes}
-            {...listeners}
-            className="flex-shrink-0 text-[#2e2e38] hover:text-[#555568] cursor-grab active:cursor-grabbing"
-            onClick={(e) => e.stopPropagation()}
-          >
+          {/* Drag affordance */}
+          <div className="flex-shrink-0 text-[#2e2e38] group-hover:text-[#555568] pointer-events-none">
             <GripVertical size={12} />
           </div>
 

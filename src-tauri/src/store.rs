@@ -7,7 +7,7 @@ fn default_transition_enabled() -> bool {
 }
 
 fn default_transition_duration_ms() -> u32 {
-    800
+    1200
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
