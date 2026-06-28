@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleIconName</key>
+    <string>Sunlight</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Sunset Lamp Controller uses Bluetooth to connect to and control your sunset lamp.</string>
     <key>NSBluetoothPeripheralUsageDescription</key>

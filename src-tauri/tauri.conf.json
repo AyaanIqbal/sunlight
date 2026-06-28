@@ -38,6 +38,9 @@
       "infoPlist": "Info.plist",
       "signingIdentity": "Sunlight Dev",
       "hardenedRuntime": false
-    }
+    },
+    "resources": [
+      "resources/Assets.car"
+    ]
   }
 }

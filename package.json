@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "compile:icon": "bash scripts/compile-macos-icon.sh",
     "open:app": "bash scripts/open-built-app.sh release",
     "open:app:debug": "bash scripts/open-built-app.sh debug",
     "reset:screen-capture": "bash scripts/reset-screen-capture.sh"

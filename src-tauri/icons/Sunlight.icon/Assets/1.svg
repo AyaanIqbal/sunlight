@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="772px" height="772px" viewBox="0 0 772 772" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>Frame</title>
+    <defs>
+        <path d="M0,0 L772,0 L772,772 L0,772 L0,0 Z" id="path-1"></path>
+        <linearGradient x1="50%" y1="1.625%" x2="50%" y2="100%" id="linearGradient-2">
+            <stop stop-color="#06AEFF" offset="0%"></stop>
+            <stop stop-color="#62E3FF" offset="100%"></stop>
+        </linearGradient>
+    </defs>
+    <g id="Frame" stroke="none" fill="none" transform="translate(-0.0099, -0.0002)" xlink:href="#path-1" fill-rule="evenodd">
+        <path d="M771.009924,0.000211505579 L771.020848,99.9106254 C712.581842,451.037219 562.024915,701.000212 385.509924,701.000212 C208.995941,701.000212 58.4397236,451.04007 -5.68434189e-14,99.9166331 L0.00992429446,0.000211505579 L771.009924,0.000211505579 Z" id="Path" fill="url(#linearGradient-2)"></path>
+    </g>
+</svg>
