@@ -32,9 +32,9 @@ Built with Tauri, React, TypeScript, and Rust, Sunlight communicates directly wi
 
 <div align="center">
 
-**[Download v0.1.0 →](https://github.com/rawsab/sunlight/releases/tag/v0.1.0)**
+**[Download v0.2.0 →](https://github.com/rawsab/sunlight/releases/tag/v0.2.0)**
 
-<a href="https://github.com/rawsab/sunlight/releases/tag/v0.1.0" target="_self"><img width="200" src="https://github.com/user-attachments/assets/29236d73-1dbb-4437-81ed-69554ac0eee5" alt="Download for macOS" /></a>
+<a href="https://github.com/rawsab/sunlight/releases/tag/v0.2.0" target="_self"><img width="200" src="https://github.com/user-attachments/assets/29236d73-1dbb-4437-81ed-69554ac0eee5" alt="Download for macOS" /></a>
 
 </div>
 
