@@ -39,22 +39,32 @@ Built with Tauri, React, TypeScript, and Rust, Sunlight communicates directly wi
 
 ### Color Presets
 
-Save your favorite colors, organize them into collapsible sections, and switch between them instantly.
+Save and organize your favorite colors into customizable, collapsible sections. Easily edit, reorder, and switch between presets with a single click, with smooth transitions for a seamless lighting experience.
 
-<img width="1205" alt="Sunlight color presets" src="https://github.com/user-attachments/assets/f04c523b-86dd-41d8-b278-25fc954ca2e7" />
+<img width="1205" alt="Sunlight color presets" src="https://github.com/user-attachments/assets/52733db4-511b-4d23-9d5b-879b1a7d22f1" />
+
 
 ### Lighting Loops
 
-Create and play custom lighting sequences with configurable timing and transitions. Monitor the current step and playback progress in real time.
+Create and play custom lighting sequences with configurable timing and smooth or instant color transitions. Monitor playback progress in real time and easily control your loops.
 
-<img width="1205" alt="Sunlight lighting loops" src="https://github.com/user-attachments/assets/0d507c71-8ff6-481a-9c18-b7e4fb7e236d" />
+<img width="1205" alt="Sunlight lighting loops" src="https://github.com/user-attachments/assets/f0f22f1f-6038-42e6-973b-d84be5b3e41b" />
+
 
 ### Loop Editor
 
-Build multi-step sequences with individually configured colors, hold durations, and transition behaviors.
+Build and customize multi-step lighting sequences with individual colors, hold durations, and transition settings. Easily add, remove, and reorder steps to create personalized lighting effects.
 
-<img width="1205" alt="Sunlight loop editor" src="https://github.com/user-attachments/assets/3da9a5a9-4487-47a7-addf-e47035828119" />
+<img width="1205" alt="Sunlight loop editor" src="https://github.com/user-attachments/assets/919a6ad2-a54c-42e2-aac3-886570144525" />
 
+
+### Ambient Mode
+
+Automatically sync your lamp with on-screen content in real time. Sunlight uses adaptive color extraction and smoothing for natural transitions, with customizable brightness, saturation, responsiveness, and sampling settings.
+
+<img width="1205" alt="Sunlight loop editor" src="https://github.com/user-attachments/assets/a2880e7f-9adb-4ed9-b8d8-e557b027d301" />
+
+Screen frames are processed locally and are not saved. Ambient Mode requires macOS Screen Recording permission.
 
 
 ## Feature List
@@ -67,6 +77,7 @@ Build multi-step sequences with individually configured colors, hold durations, 
 - **Import and export** — Back up and restore presets, loops, and application settings using JSON files.
 - **Local persistence** — Store your configurations directly on your Mac, without accounts or cloud synchronization.
 - **Auto-connect** — Automatically reconnect to your lamp when launching the application.
+- **Ambient Mode** — Synchronize your lamp with on-screen content using intelligent color extraction, smooth transitions, and customizable color and brightness settings.
 
 ## Compatibility
 
@@ -101,6 +112,7 @@ If this happens, navigate to **System Settings → Privacy & Security** and sele
 2. **Choose a color** — Use the color wheel or RGB sliders to select a color. Enable **Live** to send adjustments immediately.
 3. **Create presets** — Save your current color as a preset and organize your presets into sections for easy access.
 4. **Build lighting loops** — Open the Loops tab to create a sequence of colors, configure transitions, and start playback.
+5. **Try Ambient Mode** — Open the Ambient tab, grant Screen Recording permission, and customize how your lamp responds to on-screen colors.
 
 Additional preferences, including automatic reconnection, default transition settings, and data import/export, are available from the Settings menu.
 
