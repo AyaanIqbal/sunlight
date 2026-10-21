@@ -64,7 +64,7 @@ Automatically sync your lamp with on-screen content in real time. Sunlight uses 
 
 <img width="1205" alt="Sunlight loop editor" src="https://github.com/user-attachments/assets/a2880e7f-9adb-4ed9-b8d8-e557b027d301" />
 
-Screen frames are processed locally and are not saved. Ambient Mode requires macOS Screen Recording permission.
+> **Note:** Screen frames are processed locally and are not saved. Ambient Mode requires macOS Screen Recording permission.
 
 
 ## Feature List
